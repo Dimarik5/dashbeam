@@ -21,6 +21,17 @@ struct OpenDownloadFolderArgs: Decodable {
 
 final class NativeUtilsPlugin: Plugin {
 
+    private var documentPickerDelegates: [ObjectIdentifier: DocumentPickerDelegate] = [:]
+
+    private func retainDelegate(_ delegate: DocumentPickerDelegate, for picker: UIDocumentPickerViewController) {
+        documentPickerDelegates[ObjectIdentifier(picker)] = delegate
+    }
+
+    private func releaseDelegate(for picker: UIDocumentPickerViewController) {
+        documentPickerDelegates.removeValue(forKey: ObjectIdentifier(picker))
+    }
+
+
     @objc public func selectDownloadFolder(_ invoke: Invoke) throws {
         DispatchQueue.main.async {
             let picker = UIDocumentPickerViewController(
@@ -28,7 +39,14 @@ final class NativeUtilsPlugin: Plugin {
                 asCopy: false
             )
 
-            let delegate = DocumentPickerDelegate { urls in
+            let delegate = DocumentPickerDelegate { [weak self, weak picker] urls in
+                guard let self else { return }
+                defer {
+                    if let picker {
+                        self.releaseDelegate(for: picker)
+                    }
+                }
+                
                 guard let url = urls.first else {
                     invoke.resolve(nil)
                     return
@@ -40,7 +58,7 @@ final class NativeUtilsPlugin: Plugin {
                 ])
             }
 
-            self.manager.addDelegate(delegate)
+            self.retainDelegate(delegate, for: picker)
 
             picker.delegate = delegate
             picker.allowsMultipleSelection = false
@@ -61,7 +79,14 @@ final class NativeUtilsPlugin: Plugin {
                 asCopy: true
             )
 
-            let delegate = DocumentPickerDelegate { urls in
+            let delegate = DocumentPickerDelegate { [weak self, weak picker] urls in
+                guard let self else { return }
+                defer {
+                    if let picker {
+                        self.releaseDelegate(for: picker)
+                    }
+                }
+                                                   
                 guard let url = urls.first else {
                     invoke.resolve(false)
                     return
@@ -75,7 +100,7 @@ final class NativeUtilsPlugin: Plugin {
                 invoke.resolve(true)
             }
 
-            self.manager.addDelegate(delegate)
+            self.retainDelegate(delegate, for: picker)
 
             picker.delegate = delegate
             picker.allowsMultipleSelection = true
@@ -96,7 +121,14 @@ final class NativeUtilsPlugin: Plugin {
                 asCopy: true
             )
 
-            let delegate = DocumentPickerDelegate { urls in
+            let delegate = DocumentPickerDelegate { [weak self, weak picker] urls in
+                guard let self else { return }
+                defer {
+                    if let picker {
+                        self.releaseDelegate(for: picker)
+                    }
+                }
+                                                   
                 guard let url = urls.first else {
                     invoke.resolve(false)
                     return
@@ -110,7 +142,7 @@ final class NativeUtilsPlugin: Plugin {
                 invoke.resolve(true)
             }
 
-            self.manager.addDelegate(delegate)
+            self.retainDelegate(delegate, for: picker)
 
             picker.delegate = delegate
             picker.allowsMultipleSelection = false
