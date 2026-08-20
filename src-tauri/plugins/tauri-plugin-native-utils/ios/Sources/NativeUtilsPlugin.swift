@@ -23,17 +23,25 @@ final class NativeUtilsPlugin: Plugin {
 
     private var documentPickerDelegates: [ObjectIdentifier: DocumentPickerDelegate] = [:]
 
-    private func retainDelegate(_ delegate: DocumentPickerDelegate, for picker: UIDocumentPickerViewController) {
+    private func retainDelegate(
+        _ delegate: DocumentPickerDelegate,
+        for picker: UIDocumentPickerViewController
+    ) {
         documentPickerDelegates[ObjectIdentifier(picker)] = delegate
     }
 
-    private func releaseDelegate(for picker: UIDocumentPickerViewController) {
-        documentPickerDelegates.removeValue(forKey: ObjectIdentifier(picker))
+    private func releaseDelegate(
+        for picker: UIDocumentPickerViewController
+    ) {
+        documentPickerDelegates.removeValue(
+            forKey: ObjectIdentifier(picker)
+        )
     }
 
-
     @objc public func selectDownloadFolder(_ invoke: Invoke) throws {
-        DispatchQueue.main.async {
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+
             let picker = UIDocumentPickerViewController(
                 forOpeningContentTypes: [.folder],
                 asCopy: false
@@ -41,14 +49,14 @@ final class NativeUtilsPlugin: Plugin {
 
             let delegate = DocumentPickerDelegate { [weak self, weak picker] urls in
                 guard let self else { return }
-                defer {
+
+                guard let url = urls.first else {
+                    invoke.resolve(nil)
+
                     if let picker {
                         self.releaseDelegate(for: picker)
                     }
-                }
-                
-                guard let url = urls.first else {
-                    invoke.resolve(nil)
+
                     return
                 }
 
@@ -56,6 +64,10 @@ final class NativeUtilsPlugin: Plugin {
                     "uri": url.absoluteString,
                     "path": url.path
                 ])
+
+                if let picker {
+                    self.releaseDelegate(for: picker)
+                }
             }
 
             self.retainDelegate(delegate, for: picker)
@@ -73,7 +85,9 @@ final class NativeUtilsPlugin: Plugin {
     @objc public func selectSendDocument(_ invoke: Invoke) throws {
         let args = try invoke.parseArgs(SelectItemArgs.self)
 
-        DispatchQueue.main.async {
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+
             let picker = UIDocumentPickerViewController(
                 forOpeningContentTypes: [.item],
                 asCopy: true
@@ -81,14 +95,14 @@ final class NativeUtilsPlugin: Plugin {
 
             let delegate = DocumentPickerDelegate { [weak self, weak picker] urls in
                 guard let self else { return }
-                defer {
+
+                guard let url = urls.first else {
+                    invoke.resolve(false)
+
                     if let picker {
                         self.releaseDelegate(for: picker)
                     }
-                }
-                                                   
-                guard let url = urls.first else {
-                    invoke.resolve(false)
+
                     return
                 }
 
@@ -98,6 +112,10 @@ final class NativeUtilsPlugin: Plugin {
                 )
 
                 invoke.resolve(true)
+
+                if let picker {
+                    self.releaseDelegate(for: picker)
+                }
             }
 
             self.retainDelegate(delegate, for: picker)
@@ -115,7 +133,9 @@ final class NativeUtilsPlugin: Plugin {
     @objc public func selectSendFolder(_ invoke: Invoke) throws {
         let args = try invoke.parseArgs(SelectItemArgs.self)
 
-        DispatchQueue.main.async {
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+
             let picker = UIDocumentPickerViewController(
                 forOpeningContentTypes: [.folder],
                 asCopy: true
@@ -123,14 +143,14 @@ final class NativeUtilsPlugin: Plugin {
 
             let delegate = DocumentPickerDelegate { [weak self, weak picker] urls in
                 guard let self else { return }
-                defer {
+
+                guard let url = urls.first else {
+                    invoke.resolve(false)
+
                     if let picker {
                         self.releaseDelegate(for: picker)
                     }
-                }
-                                                   
-                guard let url = urls.first else {
-                    invoke.resolve(false)
+
                     return
                 }
 
@@ -140,6 +160,10 @@ final class NativeUtilsPlugin: Plugin {
                 )
 
                 invoke.resolve(true)
+
+                if let picker {
+                    self.releaseDelegate(for: picker)
+                }
             }
 
             self.retainDelegate(delegate, for: picker)
@@ -155,27 +179,29 @@ final class NativeUtilsPlugin: Plugin {
     }
 
     @objc public func consumeShareIntent(_ invoke: Invoke) throws {
-        // Share extensions / incoming documents are not wired yet.
         invoke.resolve(false)
     }
 
     @objc public func cancelJob(_ invoke: Invoke) throws {
-        // No cancellable copy jobs yet.
         invoke.resolve()
     }
 
     @objc public func exportToTree(_ invoke: Invoke) throws {
-        // iOS does not expose Android's SAF tree URI.
-        invoke.reject("export_to_tree is not supported on iOS")
+        invoke.reject(
+            "export_to_tree is not supported on iOS"
+        )
     }
 
     @objc public func openDownloadFolder(_ invoke: Invoke) throws {
-        // iOS has no equivalent of opening an arbitrary filesystem directory.
-        invoke.reject("open_download_folder is not supported on iOS")
+        invoke.reject(
+            "open_download_folder is not supported on iOS"
+        )
     }
 
     @objc public func getWindowInsets(_ invoke: Invoke) throws {
-        DispatchQueue.main.async {
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+
             guard let window = self.manager.viewController?.view.window else {
                 invoke.resolve([
                     "top": 0.0,
@@ -187,7 +213,6 @@ final class NativeUtilsPlugin: Plugin {
             }
 
             let insets = window.safeAreaInsets
-
             let scale = window.screen.scale
 
             invoke.resolve([
@@ -211,7 +236,10 @@ final class NativeUtilsPlugin: Plugin {
         )[0]
 
         let destination = cacheDirectory
-            .appendingPathComponent("file_cache", isDirectory: true)
+            .appendingPathComponent(
+                "file_cache",
+                isDirectory: true
+            )
             .appendingPathComponent(
                 String(Int(Date().timeIntervalSince1970 * 1000)),
                 isDirectory: true
@@ -227,6 +255,7 @@ final class NativeUtilsPlugin: Plugin {
 
             for url in urls {
                 let didAccess = url.startAccessingSecurityScopedResource()
+
                 defer {
                     if didAccess {
                         url.stopAccessingSecurityScopedResource()
