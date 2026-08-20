@@ -30,7 +30,7 @@ jobs:
 
       - name: Update Tauri CLI
         run: pnpm add -D @tauri-apps/cli@latest
-        
+
       - name: Install WASM target
         run: rustup target add wasm32-unknown-unknown
 
@@ -50,8 +50,7 @@ jobs:
         run: pnpm tauri ios build --no-sign
 
       - name: Find IPA
-        run: |
-          find src-tauri/gen/apple -name "*.ipa" -print
+        run: find src-tauri/gen/apple -name "*.ipa" -print
 
       - name: Upload IPA
         uses: actions/upload-artifact@v4
