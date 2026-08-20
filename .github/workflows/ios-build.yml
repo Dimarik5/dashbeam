@@ -44,7 +44,7 @@ jobs:
         run: echo "$(brew --prefix llvm)/bin" >> "$GITHUB_PATH"
         
       - name: Build iOS
-        run: pnpm tauri ios build
+        run: pnpm tauri ios build -- --code-signing-allowed NO --code-signing-required NO
 
       - name: Find IPA
         run: find src-tauri/gen/apple -name "*.ipa" -print
