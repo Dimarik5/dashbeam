@@ -29,5 +29,7 @@ fn main() {
         eprintln!("Warning: package.json not found, using Cargo.toml version");
     }
 
+    println!("cargo:rustc-link-lib=framework=SystemConfiguration");
+    
     tauri_build::build()
 }
