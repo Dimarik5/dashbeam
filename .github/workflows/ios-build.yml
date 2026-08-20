@@ -38,7 +38,7 @@ jobs:
         run: pnpm tauri ios init
 
       - name: Build iOS
-        run: pnpm tauri ios build --no-sign
+        run: pnpm tauri ios build
 
       - name: Find IPA
         run: find src-tauri/gen/apple -name "*.ipa" -print
