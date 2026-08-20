@@ -51,7 +51,7 @@ final class NativeUtilsPlugin: Plugin {
                 guard let self else { return }
 
                 guard let url = urls.first else {
-                    invoke.resolve(null)
+                    invoke.resolve([:])
 
                     if let picker {
                         self.releaseDelegate(for: picker)
