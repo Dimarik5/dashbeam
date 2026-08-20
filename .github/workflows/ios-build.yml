@@ -24,7 +24,7 @@ jobs:
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
-
+        
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
@@ -36,7 +36,13 @@ jobs:
 
       - name: Initialize iOS
         run: pnpm tauri ios init
-
+        
+      - name: Install LLVM
+        run: brew install llvm
+        
+      - name: Add LLVM to PATH
+        run: echo "$(brew --prefix llvm)/bin" >> "$GITHUB_PATH"
+        
       - name: Build iOS
         run: pnpm tauri ios build
 
