@@ -42,12 +42,13 @@ jobs:
 
       - name: Add LLVM to PATH
         run: echo "$(brew --prefix llvm)/bin" >> "$GITHUB_PATH"
-        
-      - name: Build iOS
+
+      - name: Build iOS without signing
         run: pnpm tauri ios build --no-sign
 
       - name: Find IPA
-        run: find src-tauri/gen/apple -name "*.ipa" -print
+        run: |
+          find src-tauri/gen/apple -name "*.ipa" -print
 
       - name: Upload IPA
         uses: actions/upload-artifact@v4
