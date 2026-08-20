@@ -24,7 +24,7 @@ jobs:
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
-        
+
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
@@ -36,21 +36,51 @@ jobs:
 
       - name: Initialize iOS
         run: pnpm tauri ios init
-        
+
       - name: Install LLVM
         run: brew install llvm
-        
+
       - name: Add LLVM to PATH
         run: echo "$(brew --prefix llvm)/bin" >> "$GITHUB_PATH"
-        
-      - name: Build iOS
-        run: pnpm tauri ios build -- --code-signing-allowed NO --code-signing-required NO
 
-      - name: Find IPA
-        run: find src-tauri/gen/apple -name "*.ipa" -print
+      - name: Build WASM
+        run: pnpm run build:wasm
+
+      - name: Build frontend
+        run: pnpm run build
+
+      - name: Build iOS without signing
+        run: |
+          xcodebuild \
+            -project src-tauri/gen/apple/alt-sendme.xcodeproj \
+            -scheme alt-sendme_iOS \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            build
+
+      - name: Find app
+        run: |
+          find ~/Library/Developer/Xcode/DerivedData -name "alt-sendme_iOS.app" -type d -print
+
+      - name: Create IPA
+        run: |
+          APP_PATH=$(find ~/Library/Developer/Xcode/DerivedData -name "alt-sendme_iOS.app" -type d -print -quit)
+
+          if [ -z "$APP_PATH" ]; then
+            echo "ERROR: alt-sendme_iOS.app not found"
+            exit 1
+          fi
+
+          mkdir -p Payload
+          cp -R "$APP_PATH" Payload/alt-sendme_iOS.app
+
+          zip -r DashBeam.ipa Payload
 
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
           name: DashBeam-iOS
-          path: src-tauri/gen/apple/**/*.ipa
+          path: DashBeam.ipa
