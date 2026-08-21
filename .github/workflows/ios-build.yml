@@ -78,6 +78,29 @@ jobs:
       - name: Build iOS without signing
         run: pnpm tauri ios build --no-sign
 
+      - name: Inspect Swift libraries in IPA
+        run: |
+          IPA=$(find src-tauri/gen/apple -name "*.ipa" | head -n 1)
+
+          echo "IPA: $IPA"
+
+          rm -rf /tmp/dashbeam-ipa
+          mkdir -p /tmp/dashbeam-ipa
+
+          unzip -q "$IPA" -d /tmp/dashbeam-ipa
+
+          echo ""
+          echo "=== Frameworks directory ==="
+          find /tmp/dashbeam-ipa/Payload -path "*/Frameworks/*" -print
+
+          echo ""
+          echo "=== Swift libraries ==="
+          find /tmp/dashbeam-ipa/Payload -name "libswift*.dylib" -print
+
+          echo ""
+          echo "=== App contents ==="
+          find /tmp/dashbeam-ipa/Payload/*.app -maxdepth 2 -type f -print
+
       - name: Find IPA
         run: find src-tauri/gen/apple -name "*.ipa" -print
 
