@@ -74,7 +74,18 @@ jobs:
         run: |
           grep -n "ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES" \
           src-tauri/gen/apple/alt-sendme.xcodeproj/project.pbxproj || true
-            
+
+      - name: Check Swift runtime
+        run: |
+          SWIFT_LIB_DIR="$(xcrun --sdk iphoneos --show-sdk-path)/usr/lib/swift"
+
+          echo "Swift runtime directory:"
+          echo "$SWIFT_LIB_DIR"
+
+          echo ""
+          echo "Available Swift libraries:"
+          find "$SWIFT_LIB_DIR" -maxdepth 1 -name "libswift*.dylib" -print
+          
       - name: Build iOS without signing
         run: pnpm tauri ios build --no-sign
 
