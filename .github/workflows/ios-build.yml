@@ -48,6 +48,33 @@ jobs:
       - name: Add LLVM to PATH
         run: echo "$(brew --prefix llvm)/bin" >> "$GITHUB_PATH"
 
+      - name: Inspect Xcode Swift settings
+        run: |
+          cd src-tauri/gen/apple
+
+          xcodebuild \
+            -project alt-sendme.xcodeproj \
+            -target alt-sendme_iOS \
+            -showBuildSettings \
+            | grep -E \
+              'TARGET_NAME|SWIFT_VERSION|SWIFT_OBJC_INTERFACE_HEADER_NAME|ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES|EMBEDDED_CONTENT_CONTAINS_SWIFT|LD_RUNPATH_SEARCH_PATHS|SDKROOT'
+
+      - name: Inspect Swift toolchain
+        run: |
+          echo "=== xcrun swift ==="
+          xcrun --find swift
+
+          echo ""
+          echo "=== xcrun swiftc ==="
+          xcrun --find swiftc
+
+          echo ""
+          echo "=== Swift runtime locations ==="
+          find /Applications/Xcode_26.6.app/Contents/Developer/Toolchains \
+            -name "libswiftCore.dylib" \
+            -o -name "libswift_Concurrency.dylib" \
+            2>/dev/null
+            
       - name: Configure Swift runtime embedding
         run: |
           python3 <<'PY'
