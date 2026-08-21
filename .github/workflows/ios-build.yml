@@ -39,8 +39,8 @@ jobs:
 
       - name: Initialize iOS
         run: |
-            rm -rf src-tauri/gen/apple
-            pnpm tauri ios init
+          rm -rf src-tauri/gen/apple
+          pnpm tauri ios init
 
       - name: Install LLVM
         run: brew install llvm
@@ -48,6 +48,33 @@ jobs:
       - name: Add LLVM to PATH
         run: echo "$(brew --prefix llvm)/bin" >> "$GITHUB_PATH"
 
+      - name: Configure Swift runtime embedding
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+
+          project = Path("src-tauri/gen/apple/alt-sendme.xcodeproj/project.pbxproj")
+
+          text = project.read_text()
+
+          if "ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES = YES;" in text:
+              print("Swift runtime embedding is already enabled.")
+          else:
+              text = text.replace(
+                  "SWIFT_VERSION = 5.0;",
+                  "SWIFT_VERSION = 5.0;\n\t\t\t\tALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES = YES;"
+              )
+
+              project.write_text(text)
+              print("Enabled ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES.")
+
+          PY
+
+      - name: Check Xcode project Swift settings
+        run: |
+          grep -n "ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES" \
+          src-tauri/gen/apple/alt-sendme.xcodeproj/project.pbxproj || true
+            
       - name: Build iOS without signing
         run: pnpm tauri ios build --no-sign
 
