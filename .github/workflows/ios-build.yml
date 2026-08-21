@@ -74,29 +74,40 @@ jobs:
             -name "libswiftCore.dylib" \
             -o -name "libswift_Concurrency.dylib" \
             2>/dev/null
-            
+    
       - name: Configure Swift runtime embedding
         run: |
           python3 <<'PY'
           from pathlib import Path
 
-          project = Path("src-tauri/gen/apple/alt-sendme.xcodeproj/project.pbxproj")
+          project = Path(
+              "src-tauri/gen/apple/alt-sendme.xcodeproj/project.pbxproj"
+          )
 
           text = project.read_text()
 
-          if "ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES = YES;" in text:
-              print("Swift runtime embedding is already enabled.")
-          else:
-              text = text.replace(
-                  "SWIFT_VERSION = 5.0;",
-                  "SWIFT_VERSION = 5.0;\n\t\t\t\tALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES = YES;"
-              )
+          text = text.replace(
+              "ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES = YES;",
+              "ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES = YES;\n"
+              "\t\t\t\tEMBEDDED_CONTENT_CONTAINS_SWIFT = YES;"
+          )
 
-              project.write_text(text)
-              print("Enabled ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES.")
+          project.write_text(text)
 
+          print("Configured Swift runtime embedding.")
           PY
+    
+      - name: Verify Swift settings
+        run: |
+          cd src-tauri/gen/apple
 
+          xcodebuild \
+            -project alt-sendme.xcodeproj \
+            -target alt-sendme_iOS \
+            -showBuildSettings \
+            | grep -E \
+              'ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES|EMBEDDED_CONTENT_CONTAINS_SWIFT|SWIFT_VERSION|LD_RUNPATH_SEARCH_PATHS'
+              
       - name: Check Xcode project Swift settings
         run: |
           grep -n "ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES" \
