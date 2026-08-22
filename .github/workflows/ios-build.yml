@@ -150,6 +150,33 @@ jobs:
           echo "=== App contents ==="
           find /tmp/dashbeam-ipa/Payload/*.app -maxdepth 2 -type f -print
 
+      - name: Inspect generated Xcode project
+        run: |
+          cd src-tauri/gen/apple
+
+          echo "=== Swift settings ==="
+          xcodebuild \
+            -project alt-sendme.xcodeproj \
+            -target alt-sendme_iOS \
+            -showBuildSettings |
+            grep -E "ALWAYS_EMBED_SWIFT|EMBEDDED_CONTENT|SWIFT_VERSION|LD_RUNPATH"
+
+          echo
+          echo "=== Swift libraries in built app ==="
+          find build/arm64/DashBeam.app \
+            -name "libswift*.dylib" \
+            -print || true
+
+          echo
+          echo "=== Swift dependencies of app ==="
+          xcrun otool -L build/arm64/DashBeam.app/DashBeam |
+            grep swift || true
+
+          echo
+          echo "=== Swift dependencies of Concurrency ==="
+          xcrun otool -L build/arm64/DashBeam.app/Frameworks/libswift_Concurrency.dylib |
+            grep swift || true
+      
       - name: Find IPA
         run: find src-tauri/gen/apple -name "*.ipa" -print
 
