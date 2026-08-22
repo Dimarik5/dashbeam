@@ -127,13 +127,12 @@ jobs:
       - name: Build iOS without signing
         run: pnpm tauri ios build --no-sign
 
-      - name: Embed Swift runtime into IPA
+      - name: Fix missing Swift runtime libraries
         run: |
           set -e
 
           IPA="src-tauri/gen/apple/build/arm64/DashBeam.ipa"
           WORK="/tmp/dashbeam-ipa"
-          SWIFT_DIR="$(xcrun --sdk iphoneos --show-sdk-path)/usr/lib/swift"
 
           rm -rf "$WORK"
           mkdir -p "$WORK"
@@ -147,26 +146,57 @@ jobs:
           mkdir -p "$FRAMEWORKS"
 
           echo "App: $APP_PATH"
-          echo "Swift runtime: $SWIFT_DIR"
 
           echo
-          echo "=== Copying Swift runtime ==="
+          echo "=== Finding Swift runtime ==="
 
-          find "$SWIFT_DIR" -maxdepth 1 -name "libswift*.dylib" -print0 |
-            while IFS= read -r -d '' LIB; do
-              cp "$LIB" "$FRAMEWORKS/"
-              echo "Copied: $(basename "$LIB")"
-            done
+          SWIFT_CORE=$(find \
+            /Applications/Xcode_26.6.app/Contents/Developer/Toolchains \
+            -path "*/iphoneos/libswiftCore.dylib" \
+            -print -quit)
+
+          SWIFT_CONCURRENCY=$(find \
+            /Applications/Xcode_26.6.app/Contents/Developer/Toolchains \
+            -path "*/iphoneos/libswift_Concurrency.dylib" \
+            -print -quit)
+
+          echo "libswiftCore:"
+          echo "$SWIFT_CORE"
+
+          echo "libswift_Concurrency:"
+          echo "$SWIFT_CONCURRENCY"
+
+          test -f "$SWIFT_CORE"
+          test -f "$SWIFT_CONCURRENCY"
+
+          echo
+          echo "=== Copying required Swift libraries ==="
+
+          cp "$SWIFT_CORE" \
+            "$FRAMEWORKS/libswiftCore.dylib"
+
+          cp "$SWIFT_CONCURRENCY" \
+            "$FRAMEWORKS/libswift_Concurrency.dylib"
 
           echo
           echo "=== Swift libraries in app ==="
-          find "$FRAMEWORKS" -maxdepth 1 -name "libswift*.dylib" -print
+
+          find "$FRAMEWORKS" \
+            -maxdepth 1 \
+            -name "libswift*.dylib" \
+            -print
 
           echo
-          echo "=== Checking libswiftCore ==="
-          test -f "$FRAMEWORKS/libswiftCore.dylib"
+          echo "=== libswiftCore dependencies ==="
 
-          echo "libswiftCore.dylib FOUND"
+          xcrun otool -L \
+            "$FRAMEWORKS/libswiftCore.dylib"
+
+          echo
+          echo "=== libswift_Concurrency dependencies ==="
+
+          xcrun otool -L \
+            "$FRAMEWORKS/libswift_Concurrency.dylib"
 
           echo
           echo "=== Repacking IPA ==="
@@ -179,7 +209,7 @@ jobs:
           echo
           echo "=== Final IPA ==="
           ls -lh "$GITHUB_WORKSPACE/$IPA"
-
+          
       - name: Verify Swift runtime in IPA
         run: |
           set -e
