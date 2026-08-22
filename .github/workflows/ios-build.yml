@@ -48,34 +48,34 @@ jobs:
       - name: Add LLVM to PATH
         run: echo "$(brew --prefix llvm)/bin" >> "$GITHUB_PATH"
 
-      - name: Inspect Xcode Swift settings
+      # ------------------------------------------------------------
+      # Swift / Xcode diagnostics
+      # ------------------------------------------------------------
+
+      - name: Inspect Xcode and Swift versions
         run: |
-          cd src-tauri/gen/apple
+          set -e
 
-          xcodebuild \
-            -project alt-sendme.xcodeproj \
-            -target alt-sendme_iOS \
-            -showBuildSettings \
-            | grep -E \
-              'TARGET_NAME|SWIFT_VERSION|SWIFT_OBJC_INTERFACE_HEADER_NAME|ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES|EMBEDDED_CONTENT_CONTAINS_SWIFT|LD_RUNPATH_SEARCH_PATHS|SDKROOT'
+          echo "=== Xcode ==="
+          xcodebuild -version
 
-      - name: Inspect Swift toolchain
-        run: |
-          echo "=== xcrun swift ==="
-          xcrun --find swift
+          echo
+          echo "=== xcode-select ==="
+          xcode-select -p
 
-          echo ""
-          echo "=== xcrun swiftc ==="
-          xcrun --find swiftc
+          echo
+          echo "=== Swift ==="
+          xcrun swift --version
 
-          echo ""
-          echo "=== Swift runtime locations ==="
-          find /Applications/Xcode_26.6.app/Contents/Developer/Toolchains \
-            -name "libswiftCore.dylib" \
-            -o -name "libswift_Concurrency.dylib" \
-            2>/dev/null
+          echo
+          echo "=== swiftc ==="
+          xcrun swiftc --version
 
-      - name: Configure Swift runtime embedding
+          echo
+          echo "=== swift-stdlib-tool ==="
+          xcrun --find swift-stdlib-tool
+
+      - name: Configure Swift target
         run: |
           python3 <<'PY'
           from pathlib import Path
@@ -86,26 +86,32 @@ jobs:
 
           text = project.read_text()
 
-          # Remove the value we injected previously.
+          # Remove all values that we previously injected.
           text = text.replace(
               "\n\t\t\t\tEMBEDDED_CONTENT_CONTAINS_SWIFT = YES;",
               ""
           )
 
-          # Make Xcode embed the Swift runtime.
+          # Use the current Xcode Swift language mode.
+          text = text.replace(
+              "SWIFT_VERSION = 5.0;",
+              "SWIFT_VERSION = 6.0;"
+          )
+
+          # Let Xcode embed Swift runtime libraries.
           if "ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES = YES;" not in text:
               text = text.replace(
-                  "SWIFT_VERSION = 5.0;",
-                  "SWIFT_VERSION = 5.0;\n"
+                  "SWIFT_VERSION = 6.0;",
+                  "SWIFT_VERSION = 6.0;\n"
                   "\t\t\t\tALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES = YES;"
               )
 
           project.write_text(text)
 
-          print("Configured Swift runtime embedding.")
+          print("Configured Swift target.")
           PY
-    
-      - name: Verify Swift settings
+
+      - name: Inspect generated Xcode settings
         run: |
           cd src-tauri/gen/apple
 
@@ -114,27 +120,16 @@ jobs:
             -target alt-sendme_iOS \
             -showBuildSettings \
             | grep -E \
-              'ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES|EMBEDDED_CONTENT_CONTAINS_SWIFT|SWIFT_VERSION|LD_RUNPATH_SEARCH_PATHS'
-              
-      - name: Check Xcode project Swift settings
+              'TARGET_NAME|SWIFT_VERSION|SWIFT_VERSION|ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES|EMBEDDED_CONTENT_CONTAINS_SWIFT|LD_RUNPATH_SEARCH_PATHS|SDKROOT|TOOLCHAIN_DIR|SWIFT_EXEC'
+
+      # ------------------------------------------------------------
+      # Check generated sources
+      # ------------------------------------------------------------
+
+      - name: Inspect generated iOS sources
         run: |
-          grep -n "ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES" \
-          src-tauri/gen/apple/alt-sendme.xcodeproj/project.pbxproj || true
+          echo "=== Swift / ObjC sources ==="
 
-      - name: Check Swift runtime
-        run: |
-          SWIFT_LIB_DIR="$(xcrun --sdk iphoneos --show-sdk-path)/usr/lib/swift"
-
-          echo "Swift runtime directory:"
-          echo "$SWIFT_LIB_DIR"
-
-          echo ""
-          echo "Available Swift libraries:"
-          find "$SWIFT_LIB_DIR" -maxdepth 1 -name "libswift*.dylib" -print
-
-      - name: Inspect generated iOS Swift sources
-        run: |
-          echo "=== Swift files ==="
           find src-tauri/gen/apple \
             -type f \
             \( -name "*.swift" -o -name "*.m" -o -name "*.mm" \) \
@@ -142,6 +137,7 @@ jobs:
 
           echo
           echo "=== Swift references ==="
+
           grep -RniE \
             'import Swift|import Foundation|async |await |Task|@MainActor' \
             src-tauri/gen/apple \
@@ -149,249 +145,121 @@ jobs:
             --include="*.m" \
             --include="*.mm" \
             2>/dev/null || true
-            
-      - name: Build iOS without signing
-        run: pnpm tauri ios build --no-sign
 
-      - name: Diagnose Swift runtime before IPA fix
+      # ------------------------------------------------------------
+      # Build
+      # ------------------------------------------------------------
+
+      - name: Build iOS without signing
+        run: |
+          pnpm tauri ios build --no-sign
+
+      # ------------------------------------------------------------
+      # Inspect the ORIGINAL IPA
+      # No modifications here.
+      # ------------------------------------------------------------
+
+      - name: Inspect original IPA Swift runtime
         run: |
           set -e
 
           IPA="src-tauri/gen/apple/build/arm64/DashBeam.ipa"
-          WORK="/tmp/dashbeam-preflight"
+          WORK="/tmp/dashbeam-original"
 
           rm -rf "$WORK"
           mkdir -p "$WORK"
 
           unzip -q "$IPA" -d "$WORK"
 
-          APP_PATH=$(find "$WORK/Payload" -maxdepth 1 -type d -name "*.app" | head -1)
+          APP_PATH=$(find "$WORK/Payload" \
+            -maxdepth 1 \
+            -type d \
+            -name "*.app" \
+            | head -1)
 
+          FRAMEWORKS="$APP_PATH/Frameworks"
+
+          echo "=== IPA ==="
+          ls -lh "$IPA"
+
+          echo
           echo "=== APP ==="
           echo "$APP_PATH"
 
           echo
           echo "=== Frameworks ==="
-          find "$APP_PATH/Frameworks" -maxdepth 1 -type f -print || true
+          find "$FRAMEWORKS" \
+            -maxdepth 1 \
+            -type f \
+            -print 2>/dev/null || true
 
           echo
-          echo "=== Main executable Swift dependencies ==="
-          xcrun otool -L "$APP_PATH/DashBeam" | grep -E 'swift|Swift' || true
+          echo "=== Swift libraries ==="
+          find "$APP_PATH" \
+            -name "libswift*.dylib" \
+            -print
 
           echo
-          echo "=== Existing Swift libraries ==="
-          find "$APP_PATH" -name 'libswift*.dylib' -print
+          echo "=== DashBeam Swift dependencies ==="
+          xcrun otool -L "$APP_PATH/DashBeam" \
+            | grep swift || true
 
           echo
-          echo "=== Existing Swift library versions ==="
+          echo "=== Swift library dependencies ==="
 
           while IFS= read -r LIB; do
             echo
             echo "--- $LIB ---"
-            xcrun otool -L "$LIB" | grep -E 'libswiftCore|libswift_Concurrency' || true
-          done < <(find "$APP_PATH" -name 'libswift*.dylib')
-          
-      - name: Inspect swift-stdlib-tool
-        run: |
-          set -e
+            xcrun otool -L "$LIB" \
+              | grep swift || true
+          done < <(
+            find "$APP_PATH" \
+              -name "libswift*.dylib"
+          )
 
-          TOOL="$(xcrun --find swift-stdlib-tool)"
+      # ------------------------------------------------------------
+      # Ask Apple's own tool what Swift runtime is required.
+      # Do NOT copy anything yet.
+      # ------------------------------------------------------------
 
-          echo "Tool: $TOOL"
-          echo
-          echo "=== Help ==="
-          "$TOOL" --help || true
-
-          echo
-          echo "=== Version ==="
-          "$TOOL" --version || true
-
-      - name: Fix Swift runtime libraries
+      - name: Determine required Swift runtime
         run: |
           set -e
 
           IPA="src-tauri/gen/apple/build/arm64/DashBeam.ipa"
-          WORK="/tmp/dashbeam-ipa"
+          WORK="/tmp/dashbeam-stdlib"
 
           rm -rf "$WORK"
           mkdir -p "$WORK"
 
           unzip -q "$IPA" -d "$WORK"
 
-          APP_PATH=$(find "$WORK/Payload" -maxdepth 1 -type d -name "*.app" | head -1)
-          FRAMEWORKS="$APP_PATH/Frameworks"
-
-          mkdir -p "$FRAMEWORKS"
+          APP_PATH=$(find "$WORK/Payload" \
+            -maxdepth 1 \
+            -type d \
+            -name "*.app" \
+            | head -1)
 
           TOOL="$(xcrun --find swift-stdlib-tool)"
 
-          echo "APP_PATH=$APP_PATH"
-          echo "FRAMEWORKS=$FRAMEWORKS"
-          echo "TOOL=$TOOL"
+          echo "=== swift-stdlib-tool ==="
+          echo "$TOOL"
 
           echo
-          echo "=== Swift libraries BEFORE cleanup ==="
-          find "$FRAMEWORKS" \
-            -maxdepth 1 \
-            -name "libswift*.dylib" \
-            -print || true
-
-          echo
-          echo "=== Removing existing Swift runtime ==="
-
-          find "$FRAMEWORKS" \
-            -maxdepth 1 \
-            -name "libswift*.dylib" \
-            -delete
-
-          echo
-          echo "=== Swift libraries AFTER cleanup ==="
-          find "$FRAMEWORKS" \
-            -maxdepth 1 \
-            -name "libswift*.dylib" \
-            -print || true
-
-          echo
-          echo "=== Swift stdlib tool ==="
-          "$TOOL" --help | head -100
-
-          echo
-          echo "=== Copying required Swift runtime ==="
+          echo "=== Required runtime ==="
 
           "$TOOL" \
-            --copy \
+            --print \
             --verbose \
             --scan-executable "$APP_PATH/DashBeam" \
-            --scan-folder "$FRAMEWORKS" \
-            --platform iphoneos \
-            --destination "$FRAMEWORKS"
+            --scan-folder "$APP_PATH/Frameworks" \
+            --platform iphoneos
 
-          echo
-          echo "=== Swift libraries AFTER tool ==="
+      # ------------------------------------------------------------
+      # Verify IPA, but DO NOT modify it.
+      # ------------------------------------------------------------
 
-          find "$FRAMEWORKS" \
-            -maxdepth 1 \
-            -name "libswift*.dylib" \
-            -print
-
-          echo
-          echo "=== Swift Core ==="
-          test -f "$FRAMEWORKS/libswiftCore.dylib"
-          echo "OK: libswiftCore.dylib"
-
-          echo
-          echo "=== Swift Concurrency ==="
-          test -f "$FRAMEWORKS/libswift_Concurrency.dylib"
-          echo "OK: libswift_Concurrency.dylib"
-
-          echo
-          echo "=== DashBeam Swift dependencies ==="
-          xcrun otool -L "$APP_PATH/DashBeam" | grep swift || true
-
-          echo
-          echo "=== Concurrency dependencies ==="
-          xcrun otool -L "$FRAMEWORKS/libswift_Concurrency.dylib" | grep swift || true
-
-          echo
-          echo "=== Repacking IPA ==="
-
-          rm -f "$IPA"
-
-          cd "$WORK"
-          zip -qry "$GITHUB_WORKSPACE/$IPA" Payload
-
-          echo
-          echo "=== Final IPA ==="
-          ls -lh "$GITHUB_WORKSPACE/$IPA"
-
-      - name: Inspect Swift runtime versions
-        run: |
-          set -e
-
-          IPA="src-tauri/gen/apple/build/arm64/DashBeam.ipa"
-          TMP="/tmp/dashbeam-runtime-inspect"
-
-          rm -rf "$TMP"
-          mkdir -p "$TMP"
-
-          unzip -q "$IPA" -d "$TMP"
-
-          APP_PATH=$(find "$TMP/Payload" -maxdepth 1 -type d -name "*.app" | head -1)
-          FRAMEWORKS="$APP_PATH/Frameworks"
-
-          echo "=== Swift libraries ==="
-          ls -lh "$FRAMEWORKS"/libswift*.dylib
-
-          echo
-          echo "=== libswiftCore ==="
-          xcrun otool -L \
-            "$FRAMEWORKS/libswiftCore.dylib"
-
-          echo
-          echo "=== libswift_Concurrency ==="
-          xcrun otool -L \
-            "$FRAMEWORKS/libswift_Concurrency.dylib"
-
-          echo
-          echo "=== UUID: libswiftCore ==="
-          xcrun dwarfdump --uuid \
-            "$FRAMEWORKS/libswiftCore.dylib"
-
-          echo
-          echo "=== UUID: libswift_Concurrency ==="
-          xcrun dwarfdump --uuid \
-            "$FRAMEWORKS/libswift_Concurrency.dylib"
-
-          echo
-          echo "=== Xcode Swift runtimes ==="
-
-          find /Applications/Xcode_26.6.app/Contents/Developer/Toolchains \
-            \( -path "*/iphoneos/libswiftCore.dylib" \
-            -o -path "*/iphoneos/libswift_Concurrency.dylib" \) \
-            -print
-
-      - name: Compare Swift runtime binaries
-        run: |
-          set -e
-
-          IPA="src-tauri/gen/apple/build/arm64/DashBeam.ipa"
-          TMP="/tmp/dashbeam-runtime-compare"
-
-          rm -rf "$TMP"
-          mkdir -p "$TMP"
-
-          unzip -q "$IPA" -d "$TMP"
-
-          APP_PATH=$(find "$TMP/Payload" -maxdepth 1 -type d -name "*.app" | head -1)
-          FRAMEWORKS="$APP_PATH/Frameworks"
-
-          echo "=== IPA SHA256 ==="
-
-          shasum -a 256 \
-            "$FRAMEWORKS/libswiftCore.dylib"
-
-          shasum -a 256 \
-            "$FRAMEWORKS/libswift_Concurrency.dylib"
-
-          echo
-          echo "=== Xcode swift-5.0 SHA256 ==="
-
-          shasum -a 256 \
-            /Applications/Xcode_26.6.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.0/iphoneos/libswiftCore.dylib
-
-          echo
-          echo "=== Xcode swift-5.5 SHA256 ==="
-
-          shasum -a 256 \
-            /Applications/Xcode_26.6.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.5/iphoneos/libswift_Concurrency.dylib
-
-          echo
-          echo "=== File information ==="
-
-          file "$FRAMEWORKS/libswiftCore.dylib"
-          file "$FRAMEWORKS/libswift_Concurrency.dylib"
-          
-      - name: Verify Swift runtime in IPA
+      - name: Verify original IPA
         run: |
           set -e
 
@@ -403,26 +271,48 @@ jobs:
 
           unzip -q "$IPA" -d "$TMP"
 
-          APP_PATH=$(find "$TMP/Payload" -maxdepth 1 -type d -name "*.app" | head -1)
-
-          echo "=== Swift libraries in final IPA ==="
-          find "$APP_PATH/Frameworks" \
+          APP_PATH=$(find "$TMP/Payload" \
             -maxdepth 1 \
+            -type d \
+            -name "*.app" \
+            | head -1)
+
+          echo "=== Final IPA ==="
+          ls -lh "$IPA"
+
+          echo
+          echo "=== Swift libraries ==="
+          find "$APP_PATH" \
             -name "libswift*.dylib" \
             -print
 
           echo
           echo "=== libswiftCore ==="
-          test -f "$APP_PATH/Frameworks/libswiftCore.dylib"
-          echo "OK: libswiftCore.dylib is present"
+
+          if [ -f "$APP_PATH/Frameworks/libswiftCore.dylib" ]; then
+            echo "FOUND"
+            xcrun otool -L \
+              "$APP_PATH/Frameworks/libswiftCore.dylib"
+          else
+            echo "NOT EMBEDDED"
+          fi
 
           echo
           echo "=== libswift_Concurrency ==="
-          test -f "$APP_PATH/Frameworks/libswift_Concurrency.dylib"
-          echo "OK: libswift_Concurrency.dylib is present"
-          
+
+          if [ -f "$APP_PATH/Frameworks/libswift_Concurrency.dylib" ]; then
+            echo "FOUND"
+            xcrun otool -L \
+              "$APP_PATH/Frameworks/libswift_Concurrency.dylib"
+          else
+            echo "NOT EMBEDDED"
+          fi
+
       - name: Find IPA
-        run: find src-tauri/gen/apple -name "*.ipa" -print
+        run: |
+          find src-tauri/gen/apple \
+            -name "*.ipa" \
+            -print
 
       - name: Upload IPA
         uses: actions/upload-artifact@v4
