@@ -74,7 +74,7 @@ jobs:
             -name "libswiftCore.dylib" \
             -o -name "libswift_Concurrency.dylib" \
             2>/dev/null
-    
+
       - name: Configure Swift runtime embedding
         run: |
           python3 <<'PY'
@@ -86,11 +86,19 @@ jobs:
 
           text = project.read_text()
 
+          # Remove the value we injected previously.
           text = text.replace(
-              "ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES = YES;",
-              "ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES = YES;\n"
-              "\t\t\t\tEMBEDDED_CONTENT_CONTAINS_SWIFT = YES;"
+              "\n\t\t\t\tEMBEDDED_CONTENT_CONTAINS_SWIFT = YES;",
+              ""
           )
+
+          # Make Xcode embed the Swift runtime.
+          if "ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES = YES;" not in text:
+              text = text.replace(
+                  "SWIFT_VERSION = 5.0;",
+                  "SWIFT_VERSION = 5.0;\n"
+                  "\t\t\t\tALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES = YES;"
+              )
 
           project.write_text(text)
 
@@ -145,6 +153,44 @@ jobs:
       - name: Build iOS without signing
         run: pnpm tauri ios build --no-sign
 
+      - name: Diagnose Swift runtime before IPA fix
+        run: |
+          set -e
+
+          IPA="src-tauri/gen/apple/build/arm64/DashBeam.ipa"
+          WORK="/tmp/dashbeam-preflight"
+
+          rm -rf "$WORK"
+          mkdir -p "$WORK"
+
+          unzip -q "$IPA" -d "$WORK"
+
+          APP_PATH=$(find "$WORK/Payload" -maxdepth 1 -type d -name "*.app" | head -1)
+
+          echo "=== APP ==="
+          echo "$APP_PATH"
+
+          echo
+          echo "=== Frameworks ==="
+          find "$APP_PATH/Frameworks" -maxdepth 1 -type f -print || true
+
+          echo
+          echo "=== Main executable Swift dependencies ==="
+          xcrun otool -L "$APP_PATH/DashBeam" | grep -E 'swift|Swift' || true
+
+          echo
+          echo "=== Existing Swift libraries ==="
+          find "$APP_PATH" -name 'libswift*.dylib' -print
+
+          echo
+          echo "=== Existing Swift library versions ==="
+
+          while IFS= read -r LIB; do
+            echo
+            echo "--- $LIB ---"
+            xcrun otool -L "$LIB" | grep -E 'libswiftCore|libswift_Concurrency' || true
+          done < <(find "$APP_PATH" -name 'libswift*.dylib')
+          
       - name: Inspect swift-stdlib-tool
         run: |
           set -e
