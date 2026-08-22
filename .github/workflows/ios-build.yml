@@ -142,7 +142,7 @@ jobs:
           echo "=== Version ==="
           "$TOOL" --version || true
 
-      - name: Fix missing Swift runtime libraries
+      - name: Fix Swift runtime libraries
         run: |
           set -e
 
@@ -159,40 +159,95 @@ jobs:
 
           mkdir -p "$FRAMEWORKS"
 
+          TOOL="$(xcrun --find swift-stdlib-tool)"
+          TOOLCHAIN="$(dirname "$(dirname "$TOOL")")"
+
           echo "APP_PATH=$APP_PATH"
           echo "FRAMEWORKS=$FRAMEWORKS"
-
-          TOOL="$(xcrun --find swift-stdlib-tool)"
-
-          echo
-          echo "=== Swift stdlib tool ==="
-          echo "$TOOL"
+          echo "TOOL=$TOOL"
+          echo "TOOLCHAIN=$TOOLCHAIN"
 
           echo
-          echo "=== Required Swift runtime ==="
+          echo "=== Swift libraries BEFORE cleanup ==="
+          find "$FRAMEWORKS" \
+            -maxdepth 1 \
+            -name "libswift*.dylib" \
+            -print || true
+
+          echo
+          echo "=== Removing existing Swift runtime ==="
+
+          find "$FRAMEWORKS" \
+            -maxdepth 1 \
+            -name "libswift*.dylib" \
+            -delete
+
+          echo
+          echo "=== Swift libraries AFTER cleanup ==="
+          find "$FRAMEWORKS" \
+            -maxdepth 1 \
+            -name "libswift*.dylib" \
+            -print || true
+
+          echo
+          echo "=== Swift stdlib tool: detected requirements ==="
+
+          "$TOOL" \
+            --print \
+            --verbose \
+            --scan-executable "$APP_PATH/DashBeam" \
+            --scan-folder "$FRAMEWORKS" \
+            --platform iphoneos \
+            --toolchain "$TOOLCHAIN"
+
+          echo
+          echo "=== Copying required Swift runtime ==="
+
           "$TOOL" \
             --copy \
             --verbose \
             --scan-executable "$APP_PATH/DashBeam" \
             --scan-folder "$FRAMEWORKS" \
             --platform iphoneos \
+            --toolchain "$TOOLCHAIN" \
             --destination "$FRAMEWORKS"
 
           echo
-          echo "=== Swift libraries in IPA ==="
+          echo "=== Swift libraries AFTER tool ==="
+
           find "$FRAMEWORKS" \
             -maxdepth 1 \
             -name "libswift*.dylib" \
             -print
 
           echo
-          echo "=== Repacking ==="
+          echo "=== Swift Core ==="
+          test -f "$FRAMEWORKS/libswiftCore.dylib"
+          echo "OK: libswiftCore.dylib"
+
+          echo
+          echo "=== Swift Concurrency ==="
+          test -f "$FRAMEWORKS/libswift_Concurrency.dylib"
+          echo "OK: libswift_Concurrency.dylib"
+
+          echo
+          echo "=== Versions ==="
+
+          xcrun otool -L "$FRAMEWORKS/libswiftCore.dylib" | head -20
+
+          echo
+          xcrun otool -L "$FRAMEWORKS/libswift_Concurrency.dylib" | head -20
+
+          echo
+          echo "=== Repacking IPA ==="
 
           rm -f "$IPA"
 
           cd "$WORK"
           zip -qry "$GITHUB_WORKSPACE/$IPA" Payload
 
+          echo
+          echo "=== Final IPA ==="
           ls -lh "$GITHUB_WORKSPACE/$IPA"
           
       - name: Verify Swift runtime in IPA
