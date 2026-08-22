@@ -160,12 +160,10 @@ jobs:
           mkdir -p "$FRAMEWORKS"
 
           TOOL="$(xcrun --find swift-stdlib-tool)"
-          TOOLCHAIN="$(dirname "$(dirname "$TOOL")")"
 
           echo "APP_PATH=$APP_PATH"
           echo "FRAMEWORKS=$FRAMEWORKS"
           echo "TOOL=$TOOL"
-          echo "TOOLCHAIN=$TOOLCHAIN"
 
           echo
           echo "=== Swift libraries BEFORE cleanup ==="
@@ -190,15 +188,8 @@ jobs:
             -print || true
 
           echo
-          echo "=== Swift stdlib tool: detected requirements ==="
-
-          "$TOOL" \
-            --print \
-            --verbose \
-            --scan-executable "$APP_PATH/DashBeam" \
-            --scan-folder "$FRAMEWORKS" \
-            --platform iphoneos \
-            --toolchain "$TOOLCHAIN"
+          echo "=== Swift stdlib tool ==="
+          "$TOOL" --help | head -100
 
           echo
           echo "=== Copying required Swift runtime ==="
@@ -209,7 +200,6 @@ jobs:
             --scan-executable "$APP_PATH/DashBeam" \
             --scan-folder "$FRAMEWORKS" \
             --platform iphoneos \
-            --toolchain "$TOOLCHAIN" \
             --destination "$FRAMEWORKS"
 
           echo
@@ -231,12 +221,12 @@ jobs:
           echo "OK: libswift_Concurrency.dylib"
 
           echo
-          echo "=== Versions ==="
-
-          xcrun otool -L "$FRAMEWORKS/libswiftCore.dylib" | head -20
+          echo "=== DashBeam Swift dependencies ==="
+          xcrun otool -L "$APP_PATH/DashBeam" | grep swift || true
 
           echo
-          xcrun otool -L "$FRAMEWORKS/libswift_Concurrency.dylib" | head -20
+          echo "=== Concurrency dependencies ==="
+          xcrun otool -L "$FRAMEWORKS/libswift_Concurrency.dylib" | grep swift || true
 
           echo
           echo "=== Repacking IPA ==="
@@ -249,7 +239,7 @@ jobs:
           echo
           echo "=== Final IPA ==="
           ls -lh "$GITHUB_WORKSPACE/$IPA"
-          
+      
       - name: Verify Swift runtime in IPA
         run: |
           set -e
