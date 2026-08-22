@@ -126,7 +126,7 @@ jobs:
           
       - name: Build iOS without signing
         run: pnpm tauri ios build --no-sign
-
+      
       - name: Fix missing Swift runtime libraries
         run: |
           set -e
@@ -148,55 +148,36 @@ jobs:
           echo "App: $APP_PATH"
 
           echo
-          echo "=== Finding Swift runtime ==="
-
-          SWIFT_CORE=$(find \
-            /Applications/Xcode_26.6.app/Contents/Developer/Toolchains \
-            -path "*/iphoneos/libswiftCore.dylib" \
-            -print -quit)
-
-          SWIFT_CONCURRENCY=$(find \
-            /Applications/Xcode_26.6.app/Contents/Developer/Toolchains \
-            -path "*/iphoneos/libswift_Concurrency.dylib" \
-            -print -quit)
-
-          echo "libswiftCore:"
-          echo "$SWIFT_CORE"
-
-          echo "libswift_Concurrency:"
-          echo "$SWIFT_CONCURRENCY"
-
-          test -f "$SWIFT_CORE"
-          test -f "$SWIFT_CONCURRENCY"
+          echo "=== Swift stdlib tool ==="
+          xcrun --find swift-stdlib-tool
+          xcrun swift-stdlib-tool --help | head -40
 
           echo
-          echo "=== Copying required Swift libraries ==="
-
-          cp "$SWIFT_CORE" \
-            "$FRAMEWORKS/libswiftCore.dylib"
-
-          cp "$SWIFT_CONCURRENCY" \
-            "$FRAMEWORKS/libswift_Concurrency.dylib"
+          echo "=== Swift libraries required by app ==="
+          xcrun swift-stdlib-tool \
+            --print \
+            --verbose \
+            --scan-executable "$APP_PATH/DashBeam" \
+            --scan-folder "$FRAMEWORKS" \
+            --platform iphoneos
 
           echo
-          echo "=== Swift libraries in app ==="
+          echo "=== Copying required Swift runtime ==="
 
+          xcrun swift-stdlib-tool \
+            --copy \
+            --verbose \
+            --scan-executable "$APP_PATH/DashBeam" \
+            --scan-folder "$FRAMEWORKS" \
+            --platform iphoneos \
+            --unsigned-destination "$FRAMEWORKS"
+
+          echo
+          echo "=== Swift libraries after fix ==="
           find "$FRAMEWORKS" \
             -maxdepth 1 \
             -name "libswift*.dylib" \
             -print
-
-          echo
-          echo "=== libswiftCore dependencies ==="
-
-          xcrun otool -L \
-            "$FRAMEWORKS/libswiftCore.dylib"
-
-          echo
-          echo "=== libswift_Concurrency dependencies ==="
-
-          xcrun otool -L \
-            "$FRAMEWORKS/libswift_Concurrency.dylib"
 
           echo
           echo "=== Repacking IPA ==="
