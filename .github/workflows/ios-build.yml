@@ -49,33 +49,37 @@ jobs:
         run: echo "$(brew --prefix llvm)/bin" >> "$GITHUB_PATH"
 
       # ------------------------------------------------------------
-      # Swift / Xcode diagnostics
+      # Inspect generated Xcode project
       # ------------------------------------------------------------
 
-      - name: Inspect Xcode and Swift versions
+      - name: Inspect Xcode project
         run: |
-          set -e
+          cd src-tauri/gen/apple
 
-          echo "=== Xcode ==="
-          xcodebuild -version
+          echo "=== Build settings ==="
 
-          echo
-          echo "=== xcode-select ==="
-          xcode-select -p
-
-          echo
-          echo "=== Swift ==="
-          xcrun swift --version
-
-          echo
-          echo "=== swiftc ==="
-          xcrun swiftc --version
+          xcodebuild \
+            -project alt-sendme.xcodeproj \
+            -target alt-sendme_iOS \
+            -showBuildSettings \
+            | grep -E \
+              'TARGET_NAME|SWIFT_VERSION|ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES|EMBEDDED_CONTENT_CONTAINS_SWIFT|LD_RUNPATH_SEARCH_PATHS|IPHONEOS_DEPLOYMENT_TARGET|SDKROOT' \
+            || true
 
           echo
-          echo "=== swift-stdlib-tool ==="
-          xcrun --find swift-stdlib-tool
+          echo "=== Project Swift settings ==="
 
-      - name: Configure Swift target
+          grep -nE \
+            'SWIFT_VERSION|ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES|EMBEDDED_CONTENT_CONTAINS_SWIFT' \
+            alt-sendme.xcodeproj/project.pbxproj \
+            || true
+
+      # ------------------------------------------------------------
+      # There are no Swift sources in this project.
+      # Explicitly prevent Xcode from embedding Swift runtime.
+      # ------------------------------------------------------------
+
+      - name: Disable Swift runtime embedding
         run: |
           python3 <<'PY'
           from pathlib import Path
@@ -86,53 +90,55 @@ jobs:
 
           text = project.read_text()
 
-          # Remove all values that we previously injected.
+          # Remove settings we previously injected.
           text = text.replace(
-              "\n\t\t\t\tEMBEDDED_CONTENT_CONTAINS_SWIFT = YES;",
-              ""
+              "ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES = YES;",
+              "ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES = NO;"
           )
 
-          # Use the current Xcode Swift language mode.
           text = text.replace(
-              "SWIFT_VERSION = 5.0;",
-              "SWIFT_VERSION = 6.0;"
+              "EMBEDDED_CONTENT_CONTAINS_SWIFT = YES;",
+              "EMBEDDED_CONTENT_CONTAINS_SWIFT = NO;"
           )
-
-          # Let Xcode embed Swift runtime libraries.
-          if "ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES = YES;" not in text:
-              text = text.replace(
-                  "SWIFT_VERSION = 6.0;",
-                  "SWIFT_VERSION = 6.0;\n"
-                  "\t\t\t\tALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES = YES;"
-              )
 
           project.write_text(text)
 
-          print("Configured Swift target.")
+          print("Swift runtime embedding disabled.")
           PY
 
-      - name: Inspect generated Xcode settings
+      - name: Verify Swift embedding settings
         run: |
           cd src-tauri/gen/apple
+
+          echo "=== Final Xcode settings ==="
 
           xcodebuild \
             -project alt-sendme.xcodeproj \
             -target alt-sendme_iOS \
             -showBuildSettings \
             | grep -E \
-              'TARGET_NAME|SWIFT_VERSION|SWIFT_VERSION|ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES|EMBEDDED_CONTENT_CONTAINS_SWIFT|LD_RUNPATH_SEARCH_PATHS|SDKROOT|TOOLCHAIN_DIR|SWIFT_EXEC'
+              'ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES|EMBEDDED_CONTENT_CONTAINS_SWIFT|SWIFT_VERSION|LD_RUNPATH_SEARCH_PATHS' \
+            || true
 
       # ------------------------------------------------------------
-      # Check generated sources
+      # Inspect generated native sources
       # ------------------------------------------------------------
 
       - name: Inspect generated iOS sources
         run: |
-          echo "=== Swift / ObjC sources ==="
+          echo "=== Native source files ==="
 
           find src-tauri/gen/apple \
             -type f \
             \( -name "*.swift" -o -name "*.m" -o -name "*.mm" \) \
+            -print
+
+          echo
+          echo "=== Swift sources ==="
+
+          find src-tauri/gen/apple \
+            -type f \
+            -name "*.swift" \
             -print
 
           echo
@@ -144,22 +150,21 @@ jobs:
             --include="*.swift" \
             --include="*.m" \
             --include="*.mm" \
-            2>/dev/null || true
+            2>/dev/null \
+            || true
 
       # ------------------------------------------------------------
       # Build
       # ------------------------------------------------------------
 
       - name: Build iOS without signing
-        run: |
-          pnpm tauri ios build --no-sign
+        run: pnpm tauri ios build --no-sign
 
       # ------------------------------------------------------------
-      # Inspect the ORIGINAL IPA
-      # No modifications here.
+      # Inspect ORIGINAL IPA
       # ------------------------------------------------------------
 
-      - name: Inspect original IPA Swift runtime
+      - name: Inspect original IPA
         run: |
           set -e
 
@@ -177,8 +182,6 @@ jobs:
             -name "*.app" \
             | head -1)
 
-          FRAMEWORKS="$APP_PATH/Frameworks"
-
           echo "=== IPA ==="
           ls -lh "$IPA"
 
@@ -188,46 +191,57 @@ jobs:
 
           echo
           echo "=== Frameworks ==="
-          find "$FRAMEWORKS" \
+          find "$APP_PATH/Frameworks" \
             -maxdepth 1 \
             -type f \
-            -print 2>/dev/null || true
+            -print \
+            || true
 
           echo
-          echo "=== Swift libraries ==="
+          echo "=== All Swift libraries ==="
           find "$APP_PATH" \
             -name "libswift*.dylib" \
-            -print
+            -print \
+            || true
 
           echo
           echo "=== DashBeam Swift dependencies ==="
+
           xcrun otool -L "$APP_PATH/DashBeam" \
-            | grep swift || true
+            | grep -E 'swift|Swift' \
+            || true
 
           echo
-          echo "=== Swift library dependencies ==="
+          echo "=== DashBeam load commands ==="
 
-          while IFS= read -r LIB; do
-            echo
-            echo "--- $LIB ---"
-            xcrun otool -L "$LIB" \
-              | grep swift || true
-          done < <(
-            find "$APP_PATH" \
-              -name "libswift*.dylib"
-          )
+          xcrun otool -l "$APP_PATH/DashBeam" \
+            | grep -A3 -B2 \
+              -E 'LC_LOAD_DYLIB|LC_LOAD_WEAK_DYLIB' \
+            | grep -E \
+              'swift|LC_LOAD' \
+            || true
+
+          echo
+          echo "=== Code signature ==="
+
+          codesign -dvv "$APP_PATH" 2>&1 || true
 
       # ------------------------------------------------------------
-      # Ask Apple's own tool what Swift runtime is required.
-      # Do NOT copy anything yet.
+      # CRITICAL EXPERIMENT:
+      #
+      # Remove the old Swift concurrency runtime that Tauri/Xcode
+      # placed into the bundle.
+      #
+      # The main executable references it weakly.
+      # On modern iOS the Swift runtime is provided by the OS.
       # ------------------------------------------------------------
 
-      - name: Determine required Swift runtime
+      - name: Remove bundled Swift runtime
         run: |
           set -e
 
           IPA="src-tauri/gen/apple/build/arm64/DashBeam.ipa"
-          WORK="/tmp/dashbeam-stdlib"
+          WORK="/tmp/dashbeam-clean"
 
           rm -rf "$WORK"
           mkdir -p "$WORK"
@@ -240,31 +254,71 @@ jobs:
             -name "*.app" \
             | head -1)
 
-          TOOL="$(xcrun --find swift-stdlib-tool)"
+          FRAMEWORKS="$APP_PATH/Frameworks"
 
-          echo "=== swift-stdlib-tool ==="
-          echo "$TOOL"
+          echo "APP_PATH=$APP_PATH"
+          echo "FRAMEWORKS=$FRAMEWORKS"
 
           echo
-          echo "=== Required runtime ==="
+          echo "=== Swift libraries BEFORE cleanup ==="
 
-          "$TOOL" \
-            --print \
-            --verbose \
-            --scan-executable "$APP_PATH/DashBeam" \
-            --scan-folder "$APP_PATH/Frameworks" \
-            --platform iphoneos
+          find "$APP_PATH" \
+            -name "libswift*.dylib" \
+            -print \
+            || true
+
+          echo
+          echo "=== Removing bundled Swift libraries ==="
+
+          find "$APP_PATH/Frameworks" \
+            -maxdepth 1 \
+            -type f \
+            -name "libswift*.dylib" \
+            -print \
+            -delete \
+            || true
+
+          echo
+          echo "=== Swift libraries AFTER cleanup ==="
+
+          find "$APP_PATH" \
+            -name "libswift*.dylib" \
+            -print \
+            || true
+
+          echo
+          echo "=== DashBeam dependencies AFTER cleanup ==="
+
+          xcrun otool -L "$APP_PATH/DashBeam" \
+            | grep -E 'swift|Swift' \
+            || true
+
+          echo
+          echo "=== Repacking IPA ==="
+
+          rm -f "$IPA"
+
+          cd "$WORK"
+
+          zip -qry \
+            "$GITHUB_WORKSPACE/$IPA" \
+            Payload
+
+          echo
+          echo "=== Final IPA ==="
+
+          ls -lh "$GITHUB_WORKSPACE/$IPA"
 
       # ------------------------------------------------------------
-      # Verify IPA, but DO NOT modify it.
+      # Final verification
       # ------------------------------------------------------------
 
-      - name: Verify original IPA
+      - name: Verify final IPA
         run: |
           set -e
 
           IPA="src-tauri/gen/apple/build/arm64/DashBeam.ipa"
-          TMP="/tmp/dashbeam-verify"
+          TMP="/tmp/dashbeam-final"
 
           rm -rf "$TMP"
           mkdir -p "$TMP"
@@ -277,42 +331,45 @@ jobs:
             -name "*.app" \
             | head -1)
 
-          echo "=== Final IPA ==="
+          echo "=== FINAL IPA ==="
           ls -lh "$IPA"
 
           echo
+          echo "=== Frameworks ==="
+
+          find "$APP_PATH/Frameworks" \
+            -maxdepth 1 \
+            -type f \
+            -print \
+            || true
+
+          echo
           echo "=== Swift libraries ==="
+
           find "$APP_PATH" \
             -name "libswift*.dylib" \
-            -print
+            -print \
+            || true
 
           echo
-          echo "=== libswiftCore ==="
+          echo "=== DashBeam dependencies ==="
 
-          if [ -f "$APP_PATH/Frameworks/libswiftCore.dylib" ]; then
-            echo "FOUND"
-            xcrun otool -L \
-              "$APP_PATH/Frameworks/libswiftCore.dylib"
-          else
-            echo "NOT EMBEDDED"
-          fi
+          xcrun otool -L "$APP_PATH/DashBeam" \
+            | grep -E 'swift|Swift' \
+            || true
 
           echo
-          echo "=== libswift_Concurrency ==="
+          echo "=== Architecture ==="
 
-          if [ -f "$APP_PATH/Frameworks/libswift_Concurrency.dylib" ]; then
-            echo "FOUND"
-            xcrun otool -L \
-              "$APP_PATH/Frameworks/libswift_Concurrency.dylib"
-          else
-            echo "NOT EMBEDDED"
-          fi
+          file "$APP_PATH/DashBeam"
+
+          echo
+          echo "=== Code signature ==="
+
+          codesign -dvv "$APP_PATH" 2>&1 || true
 
       - name: Find IPA
-        run: |
-          find src-tauri/gen/apple \
-            -name "*.ipa" \
-            -print
+        run: find src-tauri/gen/apple -name "*.ipa" -print
 
       - name: Upload IPA
         uses: actions/upload-artifact@v4
