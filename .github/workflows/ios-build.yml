@@ -127,55 +127,52 @@ jobs:
       - name: Build iOS without signing
         run: pnpm tauri ios build --no-sign
 
-      - name: Inspect Swift libraries in IPA
+      - name: Inspect Swift runtime in IPA
         run: |
-          IPA=$(find src-tauri/gen/apple -name "*.ipa" | head -n 1)
+          set -e
 
-          echo "IPA: $IPA"
+          IPA="src-tauri/gen/apple/build/arm64/DashBeam.ipa"
+          TMP="/tmp/dashbeam-ipa"
 
-          rm -rf /tmp/dashbeam-ipa
-          mkdir -p /tmp/dashbeam-ipa
+          rm -rf "$TMP"
+          mkdir -p "$TMP"
 
-          unzip -q "$IPA" -d /tmp/dashbeam-ipa
-
-          echo ""
-          echo "=== Frameworks directory ==="
-          find /tmp/dashbeam-ipa/Payload -path "*/Frameworks/*" -print
-
-          echo ""
-          echo "=== Swift libraries ==="
-          find /tmp/dashbeam-ipa/Payload -name "libswift*.dylib" -print
-
-          echo ""
-          echo "=== App contents ==="
-          find /tmp/dashbeam-ipa/Payload/*.app -maxdepth 2 -type f -print
-
-      - name: Inspect generated Xcode project
-        run: |
-          cd src-tauri/gen/apple
-
-          echo "=== Swift settings ==="
-          xcodebuild \
-            -project alt-sendme.xcodeproj \
-            -target alt-sendme_iOS \
-            -showBuildSettings |
-            grep -E "ALWAYS_EMBED_SWIFT|EMBEDDED_CONTENT|SWIFT_VERSION|LD_RUNPATH"
+          echo "=== IPA ==="
+          ls -lh "$IPA"
 
           echo
-          echo "=== Swift libraries in built app ==="
-          find build/arm64/DashBeam.app \
+          echo "=== Extracting IPA ==="
+          unzip -q "$IPA" -d "$TMP"
+
+          APP_PATH=$(find "$TMP/Payload" -maxdepth 1 -type d -name "*.app" | head -1)
+
+          echo "APP_PATH=$APP_PATH"
+
+          echo
+          echo "=== Frameworks ==="
+          find "$APP_PATH/Frameworks" \
+            -maxdepth 1 \
+            -type f \
+            -print 2>/dev/null || true
+
+          echo
+          echo "=== Swift libraries in IPA ==="
+          find "$APP_PATH" \
             -name "libswift*.dylib" \
-            -print || true
+            -print
 
           echo
-          echo "=== Swift dependencies of app ==="
-          xcrun otool -L build/arm64/DashBeam.app/DashBeam |
+          echo "=== DashBeam Swift dependencies ==="
+          xcrun otool -L "$APP_PATH/DashBeam" |
             grep swift || true
 
           echo
-          echo "=== Swift dependencies of Concurrency ==="
-          xcrun otool -L build/arm64/DashBeam.app/Frameworks/libswift_Concurrency.dylib |
-            grep swift || true
+          echo "=== Concurrency dependencies ==="
+          if [ -f "$APP_PATH/Frameworks/libswift_Concurrency.dylib" ]; then
+            xcrun otool -L \
+              "$APP_PATH/Frameworks/libswift_Concurrency.dylib" |
+              grep swift || true
+          fi
       
       - name: Find IPA
         run: find src-tauri/gen/apple -name "*.ipa" -print
