@@ -126,7 +126,22 @@ jobs:
           
       - name: Build iOS without signing
         run: pnpm tauri ios build --no-sign
-      
+
+      - name: Inspect swift-stdlib-tool
+        run: |
+          set -e
+
+          TOOL="$(xcrun --find swift-stdlib-tool)"
+
+          echo "Tool: $TOOL"
+          echo
+          echo "=== Help ==="
+          "$TOOL" --help || true
+
+          echo
+          echo "=== Version ==="
+          "$TOOL" --version || true
+
       - name: Fix missing Swift runtime libraries
         run: |
           set -e
@@ -137,7 +152,6 @@ jobs:
           rm -rf "$WORK"
           mkdir -p "$WORK"
 
-          echo "=== Extracting IPA ==="
           unzip -q "$IPA" -d "$WORK"
 
           APP_PATH=$(find "$WORK/Payload" -maxdepth 1 -type d -name "*.app" | head -1)
@@ -145,50 +159,40 @@ jobs:
 
           mkdir -p "$FRAMEWORKS"
 
-          echo "App: $APP_PATH"
+          echo "APP_PATH=$APP_PATH"
+          echo "FRAMEWORKS=$FRAMEWORKS"
+
+          TOOL="$(xcrun --find swift-stdlib-tool)"
 
           echo
           echo "=== Swift stdlib tool ==="
-          xcrun --find swift-stdlib-tool
-          xcrun swift-stdlib-tool --help | head -40
+          echo "$TOOL"
 
           echo
-          echo "=== Swift libraries required by app ==="
-          xcrun swift-stdlib-tool \
-            --print \
-            --verbose \
-            --scan-executable "$APP_PATH/DashBeam" \
-            --scan-folder "$FRAMEWORKS" \
-            --platform iphoneos
-
-          echo
-          echo "=== Copying required Swift runtime ==="
-
-          xcrun swift-stdlib-tool \
+          echo "=== Required Swift runtime ==="
+          "$TOOL" \
             --copy \
             --verbose \
             --scan-executable "$APP_PATH/DashBeam" \
             --scan-folder "$FRAMEWORKS" \
             --platform iphoneos \
-            --unsigned-destination "$FRAMEWORKS"
+            --destination "$FRAMEWORKS"
 
           echo
-          echo "=== Swift libraries after fix ==="
+          echo "=== Swift libraries in IPA ==="
           find "$FRAMEWORKS" \
             -maxdepth 1 \
             -name "libswift*.dylib" \
             -print
 
           echo
-          echo "=== Repacking IPA ==="
+          echo "=== Repacking ==="
 
           rm -f "$IPA"
 
           cd "$WORK"
           zip -qry "$GITHUB_WORKSPACE/$IPA" Payload
 
-          echo
-          echo "=== Final IPA ==="
           ls -lh "$GITHUB_WORKSPACE/$IPA"
           
       - name: Verify Swift runtime in IPA
