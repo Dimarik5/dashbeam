@@ -25,40 +25,26 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Inspect Tauri plugin build logic
+      - name: Inspect native-utils build metadata
         run: |
           set -e
 
-          echo "=== tauri-plugin package ==="
+          echo "=== Cargo build script output ==="
 
-          PLUGIN_DIR=$(find "$HOME/.cargo" \
-            -type f \
-            -path "*/tauri-plugin-2.6.3/src/lib.rs" \
-            -print \
-            2>/dev/null \
-            | head -1 \
-            | xargs -r dirname)
+          cargo clean -p tauri-plugin-native-utils
 
-          echo "PLUGIN_DIR=$PLUGIN_DIR"
-
-          if [ -z "$PLUGIN_DIR" ]; then
-            echo "ERROR: tauri-plugin source not found"
-            echo
-            echo "=== Cargo cache ==="
-            find "$HOME/.cargo" -maxdepth 5 -type d \
-              -name 'tauri-plugin-*' \
-              -print \
-              2>/dev/null \
-              | head -50
-            exit 1
-          fi
+          cargo build \
+            --manifest-path src-tauri/plugins/tauri-plugin-native-utils/Cargo.toml \
+            -vv \
+            2>&1 | tee /tmp/native-utils-build.log
 
           echo
-          echo "=== ios_path references ==="
+          echo "=== iOS path references ==="
 
-          grep -Rni -A20 -B10 \
-            'ios_path' \
-            "$PLUGIN_DIR" \
+          grep -niE \
+            'ios|Package.swift|native-utils|tauri-plugin' \
+            /tmp/native-utils-build.log \
+            | head -200 \
             || true
             
       - name: Install dependencies
