@@ -38,6 +38,7 @@ final class NativeUtilsPlugin: Plugin {
         )
     }
 
+    @objc(select_download_folder:)
     @objc public func selectDownloadFolder(_ invoke: Invoke) throws {
         Task { @MainActor [weak self] in
             guard let self else { return }
@@ -82,6 +83,7 @@ final class NativeUtilsPlugin: Plugin {
         }
     }
 
+    @objc(select_send_document:)
     @objc public func selectSendDocument(_ invoke: Invoke) throws {
         let args = try invoke.parseArgs(SelectItemArgs.self)
 
@@ -130,6 +132,7 @@ final class NativeUtilsPlugin: Plugin {
         }
     }
 
+    @objc(select_send_folder:)
     @objc public func selectSendFolder(_ invoke: Invoke) throws {
         let args = try invoke.parseArgs(SelectItemArgs.self)
 
@@ -178,26 +181,31 @@ final class NativeUtilsPlugin: Plugin {
         }
     }
 
+    @objc(consume_share_intent:)
     @objc public func consumeShareIntent(_ invoke: Invoke) throws {
         invoke.resolve(false)
     }
 
+    @objc(cancel_job:)
     @objc public func cancelJob(_ invoke: Invoke) throws {
         invoke.resolve()
     }
 
+    @objc(export_to_tree:)
     @objc public func exportToTree(_ invoke: Invoke) throws {
         invoke.reject(
             "export_to_tree is not supported on iOS"
         )
     }
 
+    @objc(open_download_folder:)
     @objc public func openDownloadFolder(_ invoke: Invoke) throws {
         invoke.reject(
             "open_download_folder is not supported on iOS"
         )
     }
 
+    @objc(get_window_insets:)
     @objc public func getWindowInsets(_ invoke: Invoke) throws {
         Task { @MainActor [weak self] in
             guard let self else { return }
