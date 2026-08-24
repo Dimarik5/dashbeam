@@ -72,9 +72,15 @@ jobs:
 
       - name: Build iOS without signing
         run: |
-          pnpm tauri ios build --no-sign -- \
-            LIBRARY_SEARCH_PATHS="$(xcode-select -p)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/iphoneos $(xcode-select -p)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.0/iphoneos"
-            
+          XCODE_DEV="$(xcode-select -p)"
+          SWIFT_PATH_1="$XCODE_DEV/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/iphoneos"
+          SWIFT_PATH_2="$XCODE_DEV/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.0/iphoneos"
+
+          export RUSTFLAGS="-C link-arg=-L$SWIFT_PATH_1 -C link-arg=-L$SWIFT_PATH_2"
+          export LIBRARY_SEARCH_PATHS="$SWIFT_PATH_1 $SWIFT_PATH_2"
+
+          pnpm tauri ios build --no-sign
+
       - name: Remove bundled Swift runtime
         run: |
           set -e
