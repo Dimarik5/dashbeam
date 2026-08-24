@@ -153,6 +153,34 @@ jobs:
             2>/dev/null \
             || true
 
+
+
+      - name: Verify native-utils iOS plugin
+        run: |
+          echo "=== Source iOS plugin ==="
+          find src-tauri/plugins/tauri-plugin-native-utils/ios -type f -maxdepth 5 -print
+
+          echo
+          echo "=== selectDownloadFolder in source ==="
+          grep -Rni "selectDownloadFolder" \
+            src-tauri/plugins/tauri-plugin-native-utils/ios || true
+
+          echo
+          echo "=== Generated iOS plugin ==="
+          find src-tauri/gen/apple \
+            -type f \
+            \( -name "*.swift" -o -name "Package.swift" \) \
+            -print | grep -i native || true
+
+          echo
+          echo "=== selectDownloadFolder in generated project ==="
+          grep -Rni "selectDownloadFolder" \
+            src-tauri/gen/apple 2>/dev/null || true
+
+
+            
+
+
       # ------------------------------------------------------------
       # Build
       # ------------------------------------------------------------
