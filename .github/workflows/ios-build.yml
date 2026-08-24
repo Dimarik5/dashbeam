@@ -37,10 +37,32 @@ jobs:
       - name: Install wasm-bindgen
         run: cargo install wasm-bindgen-cli --version 0.2.126 --locked
 
+      - name: Inspect native-utils plugin metadata
+        run: |
+          set -e
+
+          echo "=== native-utils Cargo.toml ==="
+          cat src-tauri/plugins/tauri-plugin-native-utils/Cargo.toml
+
+          echo
+          echo "=== native-utils build.rs ==="
+          cat src-tauri/plugins/tauri-plugin-native-utils/build.rs
+
+          echo
+          echo "=== plugin path ==="
+          realpath src-tauri/plugins/tauri-plugin-native-utils/ios
+
+          echo
+          echo "=== iOS Package.swift ==="
+          cat src-tauri/plugins/tauri-plugin-native-utils/ios/Package.swift
+          
       - name: Initialize iOS
         run: |
+          set -e
+
           rm -rf src-tauri/gen/apple
-          pnpm tauri ios init
+
+          pnpm tauri ios init --verbose
 
       - name: Check generated iOS project structure
         run: |
