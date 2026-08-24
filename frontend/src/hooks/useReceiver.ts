@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { PairedInvitePayload } from '@/lib/pairing-api'
-import { IS_ANDROID, IS_WEB } from '@/lib/platform'
+import { IS_ANDROID, IS_IOS, IS_WEB } from '@/lib/platform'
 import {
 	downloadDir,
 	invoke,
@@ -547,7 +547,7 @@ export function useReceiver(): UseReceiverReturn {
 		if (isReceiving) return
 		try {
 			let selected: string | null
-			if (IS_ANDROID) {
+			if (IS_ANDROID || IS_IOS) {
 				const response = await selectDownloadFolder()
 				if (!response) return
 				selected = response.path
