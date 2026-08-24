@@ -31,7 +31,7 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Build iOS without signing
-        run: pnpm tauri ios build
+        run: pnpm tauri ios build --debug
 
       - name: Upload IPA
         uses: actions/upload-artifact@v4
