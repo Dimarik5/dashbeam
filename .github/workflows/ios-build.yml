@@ -194,6 +194,26 @@ jobs:
           grep -Rni "ios_path\|plugin" \
             src-tauri/plugins/tauri-plugin-native-utils 2>/dev/null | head -100 || true
             
+      - name: Inspect Xcode native-utils integration
+        run: |
+          echo "=== native-utils in pbxproj ==="
+          grep -niE \
+            'native-utils|native_utils|NativeUtils' \
+            src-tauri/gen/apple/alt-sendme.xcodeproj/project.pbxproj \
+            || true
+
+          echo
+          echo "=== package references ==="
+          grep -niE \
+            'package|XCRemoteSwiftPackageReference|XCLocalSwiftPackageReference' \
+            src-tauri/gen/apple/alt-sendme.xcodeproj/project.pbxproj \
+            | head -100 || true
+
+          echo
+          echo "=== generated Package.resolved ==="
+          find src-tauri/gen/apple \
+            -name 'Package.resolved' \
+            -print
             
 
 
