@@ -61,6 +61,41 @@ jobs:
           rm -rf src-tauri/gen/apple
           pnpm tauri ios init --verbose
 
+      - name: Inspect native-utils build output
+        run: |
+          set -e
+
+          echo "=== Native-utils target directories ==="
+          find src-tauri/target \
+            -type d \
+            -path '*tauri-plugin-native-utils*' \
+            -print \
+            2>/dev/null \
+            | head -100 || true
+
+          echo
+          echo "=== Native-utils generated files ==="
+          find src-tauri/target \
+            -type f \
+            -path '*tauri-plugin-native-utils*' \
+            -print \
+            2>/dev/null \
+            | head -200 || true
+
+          echo
+          echo "=== Plugin metadata candidates ==="
+          find src-tauri/target \
+            -type f \
+            \( \
+              -name '*.json' -o \
+              -name '*.toml' -o \
+              -name '*.plist' \
+            \) \
+            -print \
+            2>/dev/null \
+            | grep -i 'native-utils\|plugin' \
+            | head -200 || true
+
       - name: Inspect Tauri iOS configuration
         run: |
           set -e
