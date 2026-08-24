@@ -177,7 +177,23 @@ jobs:
           grep -Rni "selectDownloadFolder" \
             src-tauri/gen/apple 2>/dev/null || true
 
+      - name: Inspect generated iOS project
+        run: |
+          echo "=== Generated apple directory ==="
+          find src-tauri/gen/apple -maxdepth 3 -type f \
+            \( -name "Package.swift" -o -name "*.pbxproj" -o -name "*.swift" \) \
+            -print
 
+          echo
+          echo "=== Native utils references ==="
+          grep -Rni "native-utils\|native_utils\|NativeUtils" \
+            src-tauri/gen/apple 2>/dev/null || true
+
+          echo
+          echo "=== Tauri plugin iOS paths ==="
+          grep -Rni "ios_path\|plugin" \
+            src-tauri/plugins/tauri-plugin-native-utils 2>/dev/null | head -100 || true
+            
             
 
 
