@@ -218,7 +218,7 @@ jobs:
       - name: Check Tauri CLI and plugin versions
         run: |
           echo "=== Tauri CLI ==="
-          cargo tauri --version
+          pnpm tauri --version
 
           echo
           echo "=== Cargo.lock Tauri versions ==="
