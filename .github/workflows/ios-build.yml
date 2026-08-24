@@ -25,6 +25,31 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Inspect Tauri plugin build logic
+        run: |
+          set -e
+
+          echo "=== tauri-plugin source ==="
+
+          PLUGIN_SRC=$(find "$HOME/.cargo/registry/src" \
+            -path "*/tauri-plugin-2.6.3/src/build.rs" \
+            -print \
+            | head -1)
+
+          echo "PLUGIN_SRC=$PLUGIN_SRC"
+
+          if [ -z "$PLUGIN_SRC" ]; then
+            echo "ERROR: tauri-plugin 2.6.3 source not found"
+            exit 1
+          fi
+
+          echo
+          echo "=== ios_path implementation ==="
+
+          grep -n -A20 -B10 \
+            'ios_path' \
+            "$PLUGIN_SRC"
+            
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
