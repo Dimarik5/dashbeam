@@ -40,8 +40,8 @@ jobs:
       - name: Install LLVM
         run: brew install llvm
 
-      - name: Add LLVM to PATH
-        run: echo "$(brew --prefix llvm)/bin" >> "$GITHUB_PATH"
+      - name: Set LIBCLANG_PATH for Rust
+        run: echo "LIBCLANG_PATH=$(brew --prefix llvm)/lib" >> "$GITHUB_ENV"
 
       - name: Disable Swift runtime embedding
         run: |
