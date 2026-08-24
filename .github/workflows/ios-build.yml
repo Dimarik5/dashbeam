@@ -29,26 +29,43 @@ jobs:
         run: |
           set -e
 
-          echo "=== tauri-plugin source ==="
+          echo "=== tauri-plugin package ==="
 
-          PLUGIN_SRC=$(find "$HOME/.cargo/registry/src" \
-            -path "*/tauri-plugin-2.6.3/src/build.rs" \
+          cargo metadata \
+            --manifest-path src-tauri/Cargo.toml \
+            --format-version 1 \
+            --no-deps \
+            >/dev/null
+
+          PLUGIN_DIR=$(find "$HOME/.cargo" \
+            -type f \
+            -path "*/tauri-plugin-2.6.3/src/lib.rs" \
             -print \
-            | head -1)
+            2>/dev/null \
+            | head -1 \
+            | xargs -r dirname)
 
-          echo "PLUGIN_SRC=$PLUGIN_SRC"
+          echo "PLUGIN_DIR=$PLUGIN_DIR"
 
-          if [ -z "$PLUGIN_SRC" ]; then
-            echo "ERROR: tauri-plugin 2.6.3 source not found"
+          if [ -z "$PLUGIN_DIR" ]; then
+            echo "ERROR: tauri-plugin source not found"
+            echo
+            echo "=== Cargo cache ==="
+            find "$HOME/.cargo" -maxdepth 5 -type d \
+              -name 'tauri-plugin-*' \
+              -print \
+              2>/dev/null \
+              | head -50
             exit 1
           fi
 
           echo
-          echo "=== ios_path implementation ==="
+          echo "=== ios_path references ==="
 
-          grep -n -A20 -B10 \
+          grep -Rni -A20 -B10 \
             'ios_path' \
-            "$PLUGIN_SRC"
+            "$PLUGIN_DIR" \
+            || true
             
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
