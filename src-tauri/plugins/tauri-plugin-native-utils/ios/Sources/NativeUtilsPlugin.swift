@@ -39,7 +39,7 @@ final class NativeUtilsPlugin: Plugin {
     }
 
     @objc(select_download_folder:)
-    @objc public func selectDownloadFolder(_ invoke: Invoke) throws {
+    public func selectDownloadFolder(_ invoke: Invoke) {
         Task { @MainActor [weak self] in
             guard let self else { return }
 
@@ -84,129 +84,133 @@ final class NativeUtilsPlugin: Plugin {
     }
 
     @objc(select_send_document:)
-    @objc public func selectSendDocument(_ invoke: Invoke) throws {
-        let args = try invoke.parseArgs(SelectItemArgs.self)
+    public func selectSendDocument(_ invoke: Invoke) {
+        do {
+            let args = try invoke.parseArgs(SelectItemArgs.self)
 
-        Task { @MainActor [weak self] in
-            guard let self else { return }
-
-            let picker = UIDocumentPickerViewController(
-                forOpeningContentTypes: [.item],
-                asCopy: true
-            )
-
-            let delegate = DocumentPickerDelegate { [weak self, weak picker] urls in
+            Task { @MainActor [weak self] in
                 guard let self else { return }
 
-                guard let url = urls.first else {
-                    invoke.resolve(false)
+                let picker = UIDocumentPickerViewController(
+                    forOpeningContentTypes: [.item],
+                    asCopy: true
+                )
+
+                let delegate = DocumentPickerDelegate { [weak self, weak picker] urls in
+                    guard let self else { return }
+
+                    guard let url = urls.first else {
+                        invoke.resolve(false)
+
+                        if let picker {
+                            self.releaseDelegate(for: picker)
+                        }
+
+                        return
+                    }
+
+                    self.copySelectedFiles(
+                        urls: [url],
+                        channel: args.channel
+                    )
+
+                    invoke.resolve(true)
 
                     if let picker {
                         self.releaseDelegate(for: picker)
                     }
-
-                    return
                 }
 
-                self.copySelectedFiles(
-                    urls: [url],
-                    channel: args.channel
+                self.retainDelegate(delegate, for: picker)
+
+                picker.delegate = delegate
+                picker.allowsMultipleSelection = true
+
+                self.manager.viewController?.present(
+                    picker,
+                    animated: true
                 )
-
-                invoke.resolve(true)
-
-                if let picker {
-                    self.releaseDelegate(for: picker)
-                }
             }
-
-            self.retainDelegate(delegate, for: picker)
-
-            picker.delegate = delegate
-            picker.allowsMultipleSelection = true
-
-            self.manager.viewController?.present(
-                picker,
-                animated: true
-            )
+        } catch {
+            invoke.reject(error.localizedDescription)
         }
     }
 
     @objc(select_send_folder:)
-    @objc public func selectSendFolder(_ invoke: Invoke) throws {
-        let args = try invoke.parseArgs(SelectItemArgs.self)
+    public func selectSendFolder(_ invoke: Invoke) {
+        do {
+            let args = try invoke.parseArgs(SelectItemArgs.self)
 
-        Task { @MainActor [weak self] in
-            guard let self else { return }
-
-            let picker = UIDocumentPickerViewController(
-                forOpeningContentTypes: [.folder],
-                asCopy: true
-            )
-
-            let delegate = DocumentPickerDelegate { [weak self, weak picker] urls in
+            Task { @MainActor [weak self] in
                 guard let self else { return }
 
-                guard let url = urls.first else {
-                    invoke.resolve(false)
+                let picker = UIDocumentPickerViewController(
+                    forOpeningContentTypes: [.folder],
+                    asCopy: true
+                )
+
+                let delegate = DocumentPickerDelegate { [weak self, weak picker] urls in
+                    guard let self else { return }
+
+                    guard let url = urls.first else {
+                        invoke.resolve(false)
+
+                        if let picker {
+                            self.releaseDelegate(for: picker)
+                        }
+
+                        return
+                    }
+
+                    self.copySelectedFiles(
+                        urls: [url],
+                        channel: args.channel
+                    )
+
+                    invoke.resolve(true)
 
                     if let picker {
                         self.releaseDelegate(for: picker)
                     }
-
-                    return
                 }
 
-                self.copySelectedFiles(
-                    urls: [url],
-                    channel: args.channel
+                self.retainDelegate(delegate, for: picker)
+
+                picker.delegate = delegate
+                picker.allowsMultipleSelection = false
+
+                self.manager.viewController?.present(
+                    picker,
+                    animated: true
                 )
-
-                invoke.resolve(true)
-
-                if let picker {
-                    self.releaseDelegate(for: picker)
-                }
             }
-
-            self.retainDelegate(delegate, for: picker)
-
-            picker.delegate = delegate
-            picker.allowsMultipleSelection = false
-
-            self.manager.viewController?.present(
-                picker,
-                animated: true
-            )
+        } catch {
+            invoke.reject(error.localizedDescription)
         }
     }
 
     @objc(consume_share_intent:)
-    @objc public func consumeShareIntent(_ invoke: Invoke) throws {
+    public func consumeShareIntent(_ invoke: Invoke) {
         invoke.resolve(false)
     }
 
     @objc(cancel_job:)
-    @objc public func cancelJob(_ invoke: Invoke) throws {
+    public func cancelJob(_ invoke: Invoke) {
         invoke.resolve()
     }
 
     @objc(export_to_tree:)
-    @objc public func exportToTree(_ invoke: Invoke) throws {
-        invoke.reject(
-            "export_to_tree is not supported on iOS"
-        )
+    public func exportToTree(_ invoke: Invoke) {
+        invoke.reject("export_to_tree is not supported on iOS")
     }
 
     @objc(open_download_folder:)
-    @objc public func openDownloadFolder(_ invoke: Invoke) throws {
-        invoke.reject(
-            "open_download_folder is not supported on iOS"
-        )
+    public func openDownloadFolder(_ invoke: Invoke) {
+        invoke.reject("open_download_folder is not supported on iOS")
     }
 
     @objc(get_window_insets:)
-    @objc public func getWindowInsets(_ invoke: Invoke) throws {
+    public func getWindowInsets(_ invoke: Invoke) {
         Task { @MainActor [weak self] in
             guard let self else { return }
 
