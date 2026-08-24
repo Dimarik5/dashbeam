@@ -27,14 +27,22 @@ jobs:
         with:
           targets: aarch64-apple-ios wasm32-unknown-unknown
 
+      # Обязательно для build-wasm-bridge.js
+      - name: Install LLVM
+        run: |
+          brew install llvm
+          echo "$(brew --prefix llvm)/bin" >> "$GITHUB_PATH"
+
+      # Обязательно для WASM моста
+      - name: Install wasm-bindgen
+        run: cargo install wasm-bindgen-cli --version 0.2.126 --locked
+
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      # Обновляем CLI до @latest, чтобы работала команда --no-sign
       - name: Update Tauri CLI
         run: pnpm add -D @tauri-apps/cli@latest
 
-      # ОБЯЗАТЕЛЬНЫЙ ШАГ: генерирует Xcode-проект в src-tauri/gen/apple
       - name: Initialize iOS
         run: |
           rm -rf src-tauri/gen/apple
