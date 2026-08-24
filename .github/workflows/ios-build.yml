@@ -42,6 +42,71 @@ jobs:
           rm -rf src-tauri/gen/apple
           pnpm tauri ios init
 
+      - name: Check generated iOS project structure
+        run: |
+          set -e
+
+          echo "=== Generated apple directory ==="
+          find src-tauri/gen/apple \
+            -maxdepth 3 \
+            -type f \
+            \( \
+              -name "project.pbxproj" \
+              -o -name "Package.resolved" \
+              -o -name "Package.swift" \
+            \) \
+            -print
+
+          echo
+          echo "=== Xcode package references ==="
+
+          grep -nE \
+            'XCRemoteSwiftPackageReference|XCLocalSwiftPackageReference|packageProductDependencies|packageReferences' \
+            src-tauri/gen/apple/alt-sendme.xcodeproj/project.pbxproj \
+            || true
+            
+      - name: Verify native-utils package before build
+        run: |
+          set -e
+
+          echo "=== Plugin iOS package ==="
+
+          find src-tauri/plugins/tauri-plugin-native-utils/ios \
+            -maxdepth 3 \
+            -type f \
+            -print
+
+          echo
+          echo "=== Package.swift ==="
+
+          cat src-tauri/plugins/tauri-plugin-native-utils/ios/Package.swift
+
+          echo
+          echo "=== Source plugin entry point ==="
+
+          grep -nE \
+            'class NativeUtilsPlugin|selectDownloadFolder|init_plugin_native_utils|initPlugin' \
+            src-tauri/plugins/tauri-plugin-native-utils/ios/Sources/NativeUtilsPlugin.swift \
+            || true
+
+          echo
+          echo "=== Generated Xcode project ==="
+
+          grep -niE \
+            'native-utils|native_utils|NativeUtils|XCRemoteSwiftPackageReference|XCLocalSwiftPackageReference' \
+            src-tauri/gen/apple/alt-sendme.xcodeproj/project.pbxproj \
+            || true
+
+          echo
+          echo "=== Package.resolved ==="
+
+          find src-tauri/gen/apple \
+            -name 'Package.resolved' \
+            -print \
+            -exec grep -niE \
+              'native-utils|native_utils|NativeUtils' {} \; \
+            || true
+            
       - name: Install LLVM
         run: brew install llvm
 
@@ -124,37 +189,6 @@ jobs:
       # Inspect generated native sources
       # ------------------------------------------------------------
 
-      - name: Inspect generated iOS sources
-        run: |
-          echo "=== Native source files ==="
-
-          find src-tauri/gen/apple \
-            -type f \
-            \( -name "*.swift" -o -name "*.m" -o -name "*.mm" \) \
-            -print
-
-          echo
-          echo "=== Swift sources ==="
-
-          find src-tauri/gen/apple \
-            -type f \
-            -name "*.swift" \
-            -print
-
-          echo
-          echo "=== Swift references ==="
-
-          grep -RniE \
-            'import Swift|import Foundation|async |await |Task|@MainActor' \
-            src-tauri/gen/apple \
-            --include="*.swift" \
-            --include="*.m" \
-            --include="*.mm" \
-            2>/dev/null \
-            || true
-
-
-
       - name: Verify native-utils iOS plugin
         run: |
           echo "=== Source iOS plugin ==="
@@ -176,23 +210,6 @@ jobs:
           echo "=== selectDownloadFolder in generated project ==="
           grep -Rni "selectDownloadFolder" \
             src-tauri/gen/apple 2>/dev/null || true
-
-      - name: Inspect generated iOS project
-        run: |
-          echo "=== Generated apple directory ==="
-          find src-tauri/gen/apple -maxdepth 3 -type f \
-            \( -name "Package.swift" -o -name "*.pbxproj" -o -name "*.swift" \) \
-            -print
-
-          echo
-          echo "=== Native utils references ==="
-          grep -Rni "native-utils\|native_utils\|NativeUtils" \
-            src-tauri/gen/apple 2>/dev/null || true
-
-          echo
-          echo "=== Tauri plugin iOS paths ==="
-          grep -Rni "ios_path\|plugin" \
-            src-tauri/plugins/tauri-plugin-native-utils 2>/dev/null | head -100 || true
             
       - name: Inspect Xcode native-utils integration
         run: |
@@ -214,23 +231,6 @@ jobs:
           find src-tauri/gen/apple \
             -name 'Package.resolved' \
             -print
-
-      - name: Check Tauri CLI and plugin versions
-        run: |
-          echo "=== Tauri CLI ==="
-          pnpm tauri --version
-
-          echo
-          echo "=== Cargo.lock Tauri versions ==="
-          grep -A2 -B2 'name = "tauri"' src-tauri/Cargo.lock | head -20
-          grep -A2 -B2 'name = "tauri-build"' src-tauri/Cargo.lock | head -20
-          grep -A2 -B2 'name = "tauri-plugin"' src-tauri/Cargo.lock | head -20
-
-          echo
-          echo "=== Plugin build dependency ==="
-          grep -n -A5 -B5 'tauri-plugin.*build' src-tauri/plugins/tauri-plugin-native-utils/Cargo.toml
-
-
 
       # ------------------------------------------------------------
       # Build
