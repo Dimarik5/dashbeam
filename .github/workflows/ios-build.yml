@@ -48,8 +48,166 @@ jobs:
       - name: Add LLVM to PATH
         run: echo "$(brew --prefix llvm)/bin" >> "$GITHUB_PATH"
 
+      - name: Disable Swift runtime embedding
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+
+          project = Path(
+              "src-tauri/gen/apple/alt-sendme.xcodeproj/project.pbxproj"
+          )
+
+          text = project.read_text()
+
+          # Remove settings we previously injected.
+          text = text.replace(
+              "ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES = YES;",
+              "ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES = NO;"
+          )
+
+          text = text.replace(
+              "EMBEDDED_CONTENT_CONTAINS_SWIFT = YES;",
+              "EMBEDDED_CONTENT_CONTAINS_SWIFT = NO;"
+          )
+
+          project.write_text(text)
+
+          print("Swift runtime embedding disabled.")
+          PY
+          
       - name: Build iOS without signing
         run: pnpm tauri ios build --no-sign
+
+      - name: Remove bundled Swift runtime
+        run: |
+          set -e
+
+          IPA="src-tauri/gen/apple/build/arm64/DashBeam.ipa"
+          WORK="/tmp/dashbeam-clean"
+
+          rm -rf "$WORK"
+          mkdir -p "$WORK"
+
+          unzip -q "$IPA" -d "$WORK"
+
+          APP_PATH=$(find "$WORK/Payload" \
+            -maxdepth 1 \
+            -type d \
+            -name "*.app" \
+            | head -1)
+
+          FRAMEWORKS="$APP_PATH/Frameworks"
+
+          echo "APP_PATH=$APP_PATH"
+          echo "FRAMEWORKS=$FRAMEWORKS"
+
+          echo
+          echo "=== Swift libraries BEFORE cleanup ==="
+
+          find "$APP_PATH" \
+            -name "libswift*.dylib" \
+            -print \
+            || true
+
+          echo
+          echo "=== Removing bundled Swift libraries ==="
+
+          find "$APP_PATH/Frameworks" \
+            -maxdepth 1 \
+            -type f \
+            -name "libswift*.dylib" \
+            -print \
+            -delete \
+            || true
+
+          echo
+          echo "=== Swift libraries AFTER cleanup ==="
+
+          find "$APP_PATH" \
+            -name "libswift*.dylib" \
+            -print \
+            || true
+
+          echo
+          echo "=== DashBeam dependencies AFTER cleanup ==="
+
+          xcrun otool -L "$APP_PATH/DashBeam" \
+            | grep -E 'swift|Swift' \
+            || true
+
+          echo
+          echo "=== Repacking IPA ==="
+
+          rm -f "$IPA"
+
+          cd "$WORK"
+
+          zip -qry \
+            "$GITHUB_WORKSPACE/$IPA" \
+            Payload
+
+          echo
+          echo "=== Final IPA ==="
+
+          ls -lh "$GITHUB_WORKSPACE/$IPA"
+
+      - name: Verify final IPA
+        run: |
+          set -e
+
+          IPA="src-tauri/gen/apple/build/arm64/DashBeam.ipa"
+          TMP="/tmp/dashbeam-final"
+
+          rm -rf "$TMP"
+          mkdir -p "$TMP"
+
+          unzip -q "$IPA" -d "$TMP"
+
+          APP_PATH=$(find "$TMP/Payload" \
+            -maxdepth 1 \
+            -type d \
+            -name "*.app" \
+            | head -1)
+
+          echo "=== FINAL IPA ==="
+          ls -lh "$IPA"
+
+          echo
+          echo "=== Frameworks ==="
+
+          find "$APP_PATH/Frameworks" \
+            -maxdepth 1 \
+            -type f \
+            -print \
+            || true
+
+          echo
+          echo "=== Swift libraries ==="
+
+          find "$APP_PATH" \
+            -name "libswift*.dylib" \
+            -print \
+            || true
+
+          echo
+          echo "=== DashBeam dependencies ==="
+
+          xcrun otool -L "$APP_PATH/DashBeam" \
+            | grep -E 'swift|Swift' \
+            || true
+
+          echo
+          echo "=== Architecture ==="
+
+          file "$APP_PATH/DashBeam"
+
+          echo
+          echo "=== Code signature ==="
+
+          codesign -dvv "$APP_PATH" 2>&1 || true
+
+      - name: Find IPA
+        run: find src-tauri/gen/apple -name "*.ipa" -print
 
       - name: Upload IPA
         uses: actions/upload-artifact@v4
