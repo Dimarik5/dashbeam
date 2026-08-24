@@ -69,10 +69,12 @@ jobs:
 
           print("Swift runtime embedding disabled.")
           PY
-          
-      - name: Build iOS without signing
-        run: pnpm tauri ios build --no-sign
 
+      - name: Build iOS without signing
+        run: |
+          pnpm tauri ios build --no-sign -- \
+            LIBRARY_SEARCH_PATHS="$(xcode-select -p)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/iphoneos $(xcode-select -p)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.0/iphoneos"
+            
       - name: Remove bundled Swift runtime
         run: |
           set -e
