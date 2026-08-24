@@ -64,6 +64,30 @@ jobs:
 
           pnpm tauri ios init --verbose
 
+      - name: Inspect Tauri iOS configuration
+        run: |
+          set -e
+
+          echo "=== Tauri config ==="
+          cat src-tauri/tauri.conf.json
+
+          echo
+          echo "=== Cargo metadata for native-utils ==="
+          cargo metadata \
+            --manifest-path src-tauri/Cargo.toml \
+            --format-version 1 \
+            | grep -o \
+              '"name":"tauri-plugin-native-utils"' \
+            | head -1 \
+            || true
+
+          echo
+          echo "=== Generated project package references ==="
+          grep -nE \
+            'XCRemoteSwiftPackageReference|XCLocalSwiftPackageReference|packageReferences|packageProductDependencies' \
+            src-tauri/gen/apple/alt-sendme.xcodeproj/project.pbxproj \
+            || true
+
       - name: Check generated iOS project structure
         run: |
           set -e
