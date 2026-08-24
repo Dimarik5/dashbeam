@@ -26,7 +26,7 @@ pub fn init<R: Runtime, C: DeserializeOwned>(
 pub struct NativeUtils<R: Runtime>(PluginHandle<R>);
 
 impl<R: Runtime> NativeUtils<R> {
-    pub fn select_download_folder(&self) -> crate::Result<SelectDonwloadFolderResponse> {
+    pub fn select_download_folder(&self) -> crate::Result<SelectDownloadFolderResponse> {
         self.0
             .run_mobile_plugin("select_download_folder", ())
             .map_err(Into::into)

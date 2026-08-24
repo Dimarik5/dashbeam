@@ -8,7 +8,7 @@ use crate::Result;
 #[command]
 pub(crate) async fn select_download_folder<R: Runtime>(
     app: AppHandle<R>,
-) -> Result<SelectDonwloadFolderResponse> {
+) -> Result<SelectDownloadFolderResponse> {
     app.native_utils().select_download_folder()
 }
 

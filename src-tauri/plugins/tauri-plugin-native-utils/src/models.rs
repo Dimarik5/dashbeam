@@ -3,7 +3,7 @@ use tauri::ipc::Channel;
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct SelectDonwloadFolderResponse {
+pub struct SelectDownloadFolderResponse {
     pub uri: String,
     pub path: String,
 }
