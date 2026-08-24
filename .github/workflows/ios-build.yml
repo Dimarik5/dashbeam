@@ -214,7 +214,22 @@ jobs:
           find src-tauri/gen/apple \
             -name 'Package.resolved' \
             -print
-            
+
+      - name: Check Tauri CLI and plugin versions
+        run: |
+          echo "=== Tauri CLI ==="
+          cargo tauri --version
+
+          echo
+          echo "=== Cargo.lock Tauri versions ==="
+          grep -A2 -B2 'name = "tauri"' src-tauri/Cargo.lock | head -20
+          grep -A2 -B2 'name = "tauri-build"' src-tauri/Cargo.lock | head -20
+          grep -A2 -B2 'name = "tauri-plugin"' src-tauri/Cargo.lock | head -20
+
+          echo
+          echo "=== Plugin build dependency ==="
+          grep -n -A5 -B5 'tauri-plugin.*build' src-tauri/plugins/tauri-plugin-native-utils/Cargo.toml
+
 
 
       # ------------------------------------------------------------
