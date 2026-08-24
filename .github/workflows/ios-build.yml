@@ -59,10 +59,8 @@ jobs:
       - name: Initialize iOS
         run: |
           set -e
-
           rm -rf src-tauri/gen/apple
-
-          pnpm tauri ios init --verbose
+          pnpm tauri ios init --verbose --ios-framework xcode
 
       - name: Inspect Tauri iOS configuration
         run: |
