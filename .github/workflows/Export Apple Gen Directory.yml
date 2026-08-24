@@ -1,0 +1,61 @@
+name: Export Apple Gen Directory
+
+on:
+  workflow_dispatch:
+
+jobs:
+  export-gen-apple:
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.12.1
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Initialize iOS
+        run: pnpm tauri ios init
+
+      - name: Patch Info.plist
+        run: |
+          python3 <<'PY'
+          import plistlib
+          from pathlib import Path
+
+          for plist_path in Path("src-tauri/gen/apple").rglob("Info.plist"):
+              with open(plist_path, "rb") as f:
+                  data = plistlib.load(f)
+
+              data["UIFileSharingEnabled"] = True
+              data["LSSupportsOpeningDocumentsInPlace"] = True
+              data["NSSupportsDocumentBrowser"] = True
+
+              with open(plist_path, "wb") as f:
+                  plistlib.dump(data, f)
+
+              print(f"Patched: {plist_path}")
+          PY
+
+      - name: Compress gen/apple
+        run: zip -r apple-gen.zip src-tauri/gen/apple
+
+      - name: Upload Apple Gen Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: apple-gen-folder
+          path: apple-gen.zip
