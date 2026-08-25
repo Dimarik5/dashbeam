@@ -70,7 +70,7 @@ jobs:
           print("Swift runtime embedding disabled.")
           PY
 
-      - name: Patch Xcode Project Swift Search Paths
+      - name: Patch Xcode Project Swift Settings
         run: |
           python3 -c '
           from pathlib import Path
@@ -80,7 +80,10 @@ jobs:
           if pbx_path.exists():
               content = pbx_path.read_text()
               
-              # Пути к библиотекам Swift обратной совместимости
+              # 1. Повышаем минимальную версию iOS до 16.0 для поддержки Swift 6 Coroutines
+              content = re.sub(r"IPHONEOS_DEPLOYMENT_TARGET = [0-9.]+;", "IPHONEOS_DEPLOYMENT_TARGET = 16.0;", content)
+
+              # 2. Настройки путей поиска и rpath для Swift runtime
               search_setting = (
                   "\t\t\t\tLIBRARY_SEARCH_PATHS = (\n"
                   "\t\t\t\t\t\"$(inherited)\",\n"
@@ -88,16 +91,18 @@ jobs:
                   "\t\t\t\t\t\"$(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.0/$(PLATFORM_NAME)\",\n"
                   "\t\t\t\t\t\"$(SDKROOT)/usr/lib/swift\",\n"
                   "\t\t\t\t);\n"
+                  "\t\t\t\tOTHER_LDFLAGS = \"$(inherited) -Wl,-rpath,/usr/lib/swift\";\n"
               )
               
-              # Удаляем старые записи LIBRARY_SEARCH_PATHS, если они есть
+              # Очищаем старые дублирующиеся записи
               content = re.sub(r"\t\t\t\tLIBRARY_SEARCH_PATHS = \([^)]*\);\n", "", content)
+              content = re.sub(r"\t\t\t\tOTHER_LDFLAGS = [^\n]*;\n", "", content)
               
-              # Вставляем во ВСЕ блоки buildSettings
+              # Применяем новые настройки во все блоки buildSettings
               new_content = content.replace("buildSettings = {\n", "buildSettings = {\n" + search_setting)
               
               pbx_path.write_text(new_content)
-              print("Successfully patched ALL build configurations in project.pbxproj")
+              print("Successfully patched deployment target and Swift search paths")
           '
           
       - name: Build iOS without signing
