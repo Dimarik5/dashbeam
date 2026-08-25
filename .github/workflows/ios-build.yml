@@ -70,15 +70,30 @@ jobs:
           print("Swift runtime embedding disabled.")
           PY
 
+      - name: Patch Xcode Project Swift Search Paths
+        run: |
+          python3 -c '
+          from pathlib import Path
+
+          pbx_path = Path("src-tauri/gen/apple/alt-sendme.xcodeproj/project.pbxproj")
+          if pbx_path.exists():
+              content = pbx_path.read_text()
+              if "LIBRARY_SEARCH_PATHS" not in content:
+                  paths = [
+                      "$(inherited)",
+                      "$(TOOLCHAIN_DIR)/usr/lib/swift/$(PLATFORM_NAME)",
+                      "$(TOOLCHAIN_DIR)/usr/lib/swift-5.0/$(PLATFORM_NAME)"
+                  ]
+                  formatted_paths = ",\n\t\t\t\t\t".join(f"\"{p}\"" for p in paths)
+                  search_setting = f"\t\t\t\tLIBRARY_SEARCH_PATHS = (\n\t\t\t\t\t{formatted_paths},\n\t\t\t\t);\n"
+                  
+                  new_content = content.replace("buildSettings = {", "buildSettings = {\n" + search_setting)
+                  pbx_path.write_text(new_content)
+                  print("Successfully patched project.pbxproj")
+          '
+          
       - name: Build iOS without signing
         run: |
-          XCODE_DEV="$(xcode-select -p)"
-          SWIFT_PATH_1="$XCODE_DEV/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/iphoneos"
-          SWIFT_PATH_2="$XCODE_DEV/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.0/iphoneos"
-
-          export RUSTFLAGS="-C link-arg=-L$SWIFT_PATH_1 -C link-arg=-L$SWIFT_PATH_2"
-          export LIBRARY_SEARCH_PATHS="$SWIFT_PATH_1 $SWIFT_PATH_2"
-
           pnpm tauri ios build --no-sign
 
       - name: Remove bundled Swift runtime
