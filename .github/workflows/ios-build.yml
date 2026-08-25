@@ -80,30 +80,35 @@ jobs:
           if pbx_path.exists():
               content = pbx_path.read_text()
               
-              # 1. Повышаем минимальную версию iOS до 16.0 для поддержки Swift 6 Coroutines
+              # 1. Поднимаем таргетинг iOS
               content = re.sub(r"IPHONEOS_DEPLOYMENT_TARGET = [0-9.]+;", "IPHONEOS_DEPLOYMENT_TARGET = 16.0;", content)
 
-              # 2. Настройки путей поиска и rpath для Swift runtime
+              # 2. Настройка явной линковки swiftCore и swiftConcurrency
               search_setting = (
+                  "\t\t\t\tSWIFT_VERSION = 5.0;\n"
+                  "\t\t\t\tALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES = YES;\n"
                   "\t\t\t\tLIBRARY_SEARCH_PATHS = (\n"
                   "\t\t\t\t\t\"$(inherited)\",\n"
                   "\t\t\t\t\t\"$(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/$(PLATFORM_NAME)\",\n"
                   "\t\t\t\t\t\"$(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.0/$(PLATFORM_NAME)\",\n"
                   "\t\t\t\t\t\"$(SDKROOT)/usr/lib/swift\",\n"
                   "\t\t\t\t);\n"
-                  "\t\t\t\tOTHER_LDFLAGS = \"$(inherited) -Wl,-rpath,/usr/lib/swift\";\n"
+                  "\t\t\t\tOTHER_LDFLAGS = \"$(inherited) -lswiftCore -lswiftConcurrency\";\n"
               )
               
-              # Очищаем старые дублирующиеся записи
+              # Очищаем старые параметры, если они были прописаны ранее
               content = re.sub(r"\t\t\t\tLIBRARY_SEARCH_PATHS = \([^)]*\);\n", "", content)
               content = re.sub(r"\t\t\t\tOTHER_LDFLAGS = [^\n]*;\n", "", content)
+              content = re.sub(r"\t\t\t\tSWIFT_VERSION = [^\n]*;\n", "", content)
+              content = re.sub(r"\t\t\t\tALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES = [^\n]*;\n", "", content)
               
-              # Применяем новые настройки во все блоки buildSettings
+              # Применяем настройки ко всем конфигурациям
               new_content = content.replace("buildSettings = {\n", "buildSettings = {\n" + search_setting)
               
               pbx_path.write_text(new_content)
-              print("Successfully patched deployment target and Swift search paths")
+              print("Successfully injected Swift runtime linking flags")
           '
+
           
       - name: Build iOS without signing
         run: |
