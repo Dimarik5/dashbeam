@@ -3,7 +3,12 @@ import { listen } from '@/lib/platform-api'
 import { IS_PAIRING_CAPABLE } from '@/lib/platform'
 import { getRelayConfigArg } from '@/lib/relay'
 import { getDiscoveryConfigArg } from '@/lib/discovery'
-import { reconfigureNodeRelay } from '@/lib/pairing-api'
+import {
+	isKnownPairedEndpoint,
+	reconfigureNodeRelay,
+	setDiscoverability,
+} from '@/lib/pairing-api'
+import { useAppSettingStore } from '@/store/app-setting'
 import type {
 	PairedInvitePayload,
 	PairedInviteResponsePayload,
@@ -12,15 +17,19 @@ import { usePairedInviteStore } from '@/store/paired-invite-store'
 import {
 	usePairingDataStore,
 	preloadPairingData,
+	pairingDataHydrated,
 } from '@/store/pairing-data-store'
 import { ensureNodeCapabilityLifecycle } from '@/store/node-capability-store'
 import { useNodeCapability } from '@/hooks/useNodeCapability'
+import { useInviteNotifications } from '@/hooks/useInviteNotifications'
+import { ensureNotificationPermission } from '@/lib/systemNotification'
 import { useTranslation } from '@/i18n'
 import { toastManager } from '../ui/toast'
 
 /** Syncs relay settings to the device node and listens for paired invites globally. */
 export function DeviceNodeSync() {
 	const { t } = useTranslation()
+	useInviteNotifications()
 	const { isNodeReady, refreshNodeStatus } = useNodeCapability()
 	const setInvite = usePairedInviteStore((s) => s.setInvite)
 	const didSyncRelay = useRef(false)
@@ -31,6 +40,9 @@ export function DeviceNodeSync() {
 		if (!IS_PAIRING_CAPABLE) return
 		ensureNodeCapabilityLifecycle()
 		void preloadPairingData()
+		// Asked while the app is on screen: a backgrounded Activity can't show
+		// Android's POST_NOTIFICATIONS dialog. Self-guards to once per session.
+		void ensureNotificationPermission()
 	}, [])
 
 	// Preload may finish while the node is still starting; hydrate once ready.
@@ -50,6 +62,13 @@ export function DeviceNodeSync() {
 			didSyncRelay.current = false
 			console.warn('Failed to sync node relay on startup:', error)
 		})
+		// `init_node_service` already applied this at startup; re-applying is a
+		// safety net for a failed read, mirroring the relay sync above.
+		void setDiscoverability(
+			useAppSettingStore.getState().discoverability
+		).catch((error) => {
+			console.warn('Failed to sync discoverability on startup:', error)
+		})
 	}, [isNodeReady])
 
 	useEffect(() => {
@@ -64,14 +83,26 @@ export function DeviceNodeSync() {
 			const inviteUnlisten = await listen(
 				'paired-invite-received',
 				(event: { payload: unknown }) => {
+					let payload: PairedInvitePayload
 					try {
-						const payload = JSON.parse(
-							String(event.payload)
-						) as PairedInvitePayload
-						setInvite(payload)
+						payload = JSON.parse(String(event.payload)) as PairedInvitePayload
 					} catch {
 						// Ignore malformed invite payloads
+						return
 					}
+					void (async () => {
+						// One event carries both paired and Nearby invites; an unpaired
+						// sender's belongs to `NearbyInviteDialog`, which shows the
+						// fingerprint. Wait for `devices` to hydrate first, or a paired
+						// sender briefly looks unpaired and gets misrouted.
+						await pairingDataHydrated()
+						if (disposed) return
+						const { devices } = usePairingDataStore.getState()
+						if (!isKnownPairedEndpoint(devices, payload.remote_endpoint_id)) {
+							return
+						}
+						setInvite(payload)
+					})()
 				}
 			)
 			if (disposed) {

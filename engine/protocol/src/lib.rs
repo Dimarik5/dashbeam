@@ -1,8 +1,10 @@
 pub mod control;
 pub mod discovery;
 pub mod identity;
+pub mod nearby;
 pub mod pairing;
 pub mod pairing_auth;
+pub mod progress;
 pub mod receive;
 pub mod relay;
 pub mod send;
@@ -19,8 +21,14 @@ pub use identity::{
 pub use pairing::{
     pairing_host_is_persistent, PAIRING_VOTE_TIMEOUT_SECS, PAIRED_INVITE_WAIT_SECS,
     PAIRED_RECONNECT_MAX_SECS, PAIRED_RECONNECT_MIN_SECS, PRESENCE_CONNECT_TIMEOUT_SECS,
+    RECENT_PAIRING_GRACE_MS, SETTLING_PAIRING_RETRY_SECS,
 };
 pub use pairing_auth::{export_connection_keying_material, sign_challenge, verify_challenge};
+pub use nearby::{
+    allows_unpaired_control, should_answer_identity, should_publish_mdns,
+    should_run_background_presence, unpaired_message_allowed, Discoverability,
+};
+pub use progress::duration_ms;
 pub use receive::{download_to_store, fetch_metadata, DownloadToStoreResult};
 pub use relay::{
     build_relay_mode, get_relay_status, relay_fallback_policy, resolve_relay_mode_with_fallback,

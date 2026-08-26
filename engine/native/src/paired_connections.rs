@@ -5,18 +5,19 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Context;
-use iroh::endpoint::Connection;
+use iroh::endpoint::{Connection, ConnectionError};
 use iroh::EndpointId;
 use protocol::{
     export_connection_keying_material, read_message, sign_challenge, verify_challenge,
     write_message, ControlMessage, InviteResponse, PairedDevice, CONTROL_ALPN,
     PAIRED_INVITE_WAIT_SECS, PAIRED_RECONNECT_MAX_SECS, PAIRED_RECONNECT_MIN_SECS,
-    PRESENCE_CONNECT_TIMEOUT_SECS,
+    PRESENCE_CONNECT_TIMEOUT_SECS, RECENT_PAIRING_GRACE_MS, SETTLING_PAIRING_RETRY_SECS,
 };
 use tokio::sync::{Mutex, Notify, OnceCell, RwLock};
 use tokio::task::JoinHandle;
 
 use crate::device_identity::{DeviceIdentity, PairedDeviceStore};
+use crate::node::AccessState;
 use crate::pairing_util::{
     build_control_connect_addr, emit_paired_invite_received,
     emit_paired_invite_response, set_presence,
@@ -33,6 +34,7 @@ pub struct PairedConnectionManager {
     runtime: Arc<OnceCell<Arc<Mutex<crate::runtime::NodeRuntime>>>>,
     identity: Arc<DeviceIdentity>,
     paired_store: Arc<PairedDeviceStore>,
+    access: Arc<RwLock<AccessState>>,
     presence: Arc<std::sync::RwLock<HashMap<String, bool>>>,
     app_handle: AppHandle,
     sessions: Arc<RwLock<HashMap<String, Connection>>>,
@@ -42,9 +44,10 @@ pub struct PairedConnectionManager {
 }
 
 impl PairedConnectionManager {
-    pub fn new(
+    pub(crate) fn new(
         identity: Arc<DeviceIdentity>,
         paired_store: Arc<PairedDeviceStore>,
+        access: Arc<RwLock<AccessState>>,
         presence: Arc<std::sync::RwLock<HashMap<String, bool>>>,
         app_handle: AppHandle,
     ) -> Self {
@@ -53,6 +56,7 @@ impl PairedConnectionManager {
             runtime: Arc::new(OnceCell::new()),
             identity,
             paired_store,
+            access,
             presence,
             app_handle,
             sessions: Arc::new(RwLock::new(HashMap::new())),
@@ -121,6 +125,53 @@ impl PairedConnectionManager {
 
     }
 
+    /// Resets a paired device's reconnect backoff and connects immediately —
+    /// used when mDNS reports it just appeared, rather than waiting out a
+    /// backoff that may be minutes long.
+    ///
+    /// A no-op if the device isn't connectable or a live session already
+    /// exists: mDNS re-fires `Discovered` often, and aborting a live session
+    /// each time flaps presence.
+    pub async fn nudge_reconnect(&self, endpoint_id: &str) {
+        let key = endpoint_id.to_lowercase();
+        let Ok(Some(device)) = self.paired_store.get(endpoint_id) else {
+            return;
+        };
+        if !device.pairing_status.is_connectable() {
+            return;
+        }
+
+        // Only wake a task sleeping in backoff; leave a live session alone.
+        if self.sessions.read().await.contains_key(&key) {
+            return;
+        }
+
+        self.respawn_connect_task(key, device).await;
+    }
+
+    /// Test-only: the old nudge behaviour — abort and re-dial even when a live
+    /// session exists. Used to simulate an unfixed peer flapping its outbound.
+    #[doc(hidden)]
+    pub async fn force_reconnect_for_tests(&self, endpoint_id: &str) {
+        let key = endpoint_id.to_lowercase();
+        let Ok(Some(device)) = self.paired_store.get(endpoint_id) else {
+            return;
+        };
+        if !device.pairing_status.is_connectable() {
+            return;
+        }
+        self.respawn_connect_task(key, device).await;
+    }
+
+    async fn respawn_connect_task(&self, key: String, device: PairedDevice) {
+        let mut tasks = self.tasks.lock().await;
+        if let Some(handle) = tasks.remove(&key) {
+            handle.abort();
+        }
+        let handle = self.spawn_connect_task(device);
+        tasks.insert(key, handle);
+    }
+
     pub async fn forget(&self, endpoint_id: &str) {
         let key = endpoint_id.to_lowercase();
 
@@ -129,6 +180,12 @@ impl PairedConnectionManager {
 
         }
         self.remove_session(&key).await;
+    }
+
+    /// Live outbound/inbound session for `endpoint_id`, if one is currently held.
+    pub async fn live_session(&self, endpoint_id: &str) -> Option<Connection> {
+        let key = endpoint_id.to_lowercase();
+        self.sessions.read().await.get(&key).cloned()
     }
 
     pub async fn shutdown(&self) {
@@ -186,14 +243,26 @@ impl PairedConnectionManager {
 
     pub async fn register_inbound(&self, endpoint_id: &str, conn: Connection) {
         let key = endpoint_id.to_lowercase();
-        
+        // Don't replace a session we already hold (almost always our own
+        // outbound) — the inbound is still served for invites, and replacing
+        // would let its later unregister wipe our live outbound.
+        if self.sessions.read().await.contains_key(&key) {
+            set_presence(
+                &self.presence,
+                &self.app_handle,
+                &self.paired_store,
+                &key,
+                true,
+            );
+            return;
+        }
         self.set_session(&key, conn).await;
     }
 
-    pub async fn unregister_inbound(&self, endpoint_id: &str) {
+    pub async fn unregister_inbound(&self, endpoint_id: &str, conn: &Connection) {
         let key = endpoint_id.to_lowercase();
-
-        self.remove_session(&key).await;
+        // Only clear presence if *this* connection is the one we stored.
+        self.remove_session_if(&key, conn).await;
     }
 
     async fn run_supervisor(self: Arc<Self>) {
@@ -218,6 +287,7 @@ impl PairedConnectionManager {
             runtime: self.runtime.clone(),
             identity: self.identity.clone(),
             paired_store: self.paired_store.clone(),
+            access: self.access.clone(),
             presence: self.presence.clone(),
             app_handle: self.app_handle.clone(),
             sessions: self.sessions.clone(),
@@ -254,11 +324,37 @@ impl PairedConnectionManager {
 
                     // Read invites on the outbound (client) connection. The peer opens
                     // bi streams on this link when they are the QUIC server.
-                    tokio::select! {
-                        _ = conn.closed() => {}
-                        _ = self.read_outbound_control_loop(&conn) => {}
+                    let unpaired_via_forget = tokio::select! {
+                        _ = conn.closed() => false,
+                        unpaired = self.read_outbound_control_loop(&conn) => unpaired,
+                    };
+                    self.remove_session_if(&key, &conn).await;
+
+                    if unpaired_via_forget {
+                        break;
                     }
-                    self.remove_session(&key).await;
+
+                    // Forget notify is best-effort: a peer that already dropped
+                    // us accepts the dial then rejects Recognition, so treat
+                    // that close as a remote unpair.
+                    //
+                    // Unless the pairing is still settling — each side commits
+                    // independently, so a refusal this soon means the peer
+                    // hasn't stored their half yet.
+                    let close_err = conn.closed().await;
+                    if close_implies_remote_unpair(&close_err) {
+                        if self.pairing_is_settling(endpoint_id) {
+                            tracing::debug!(
+                                target: "dashbeam::_events::pairing::remote_unpair",
+                                remote = %crate::node::short_remote(endpoint_id),
+                                applied = false,
+                                cause = "pairing still settling",
+                            );
+                            backoff_secs = SETTLING_PAIRING_RETRY_SECS;
+                        } else if self.apply_remote_unpair(endpoint_id).await {
+                            break;
+                        }
+                    }
                 }
                 Err(_err) => {
                     set_presence(
@@ -328,14 +424,15 @@ impl PairedConnectionManager {
     }
 
     /// Accept bi streams on an outbound (client) control connection and handle invites.
-    async fn read_outbound_control_loop(&self, conn: &Connection) {
+    /// Returns true when the peer unpaired us and the connect loop should stop.
+    async fn read_outbound_control_loop(&self, conn: &Connection) -> bool {
         let remote = conn.remote_id();
         let remote_id = remote.to_string();
                 let keying = match export_connection_keying_material(conn) {
             Ok(keying) => keying,
             Err(_err) => {
 
-                return;
+                return false;
             }
         };
         loop {
@@ -378,11 +475,14 @@ impl PairedConnectionManager {
                         InviteResponse::Declined => "declined",
                     };
 
+                    // Always an already-paired peer, so `paired_store` has
+                    // the name.
                     emit_paired_invite_response(
                         &self.app_handle,
                         &self.paired_store,
                         &remote_id,
                         response_str,
+                        None,
                     );
                 }
                 ControlMessage::Recognition { signature } => {
@@ -399,12 +499,89 @@ impl PairedConnectionManager {
                         );
                     }
                 }
+                ControlMessage::Forget { signature } => {
+                    if verify_challenge(&remote, &keying, &signature)
+                        && self.apply_remote_unpair(&remote_id).await
+                    {
+                        return true;
+                    }
+                }
                 _other => {
 
                 }
             }
         }
+        false
+    }
 
+    /// True while our record is new enough that a refused `Recognition` more
+    /// likely means the peer hasn't committed yet than that it unpaired us.
+    /// A genuine unpair still lands immediately via the signed `Forget`.
+    fn pairing_is_settling(&self, endpoint_id: &str) -> bool {
+        let Ok(Some(existing)) = self.paired_store.get(endpoint_id) else {
+            return false;
+        };
+        protocol::identity::unix_now_ms().saturating_sub(existing.paired_at)
+            < RECENT_PAIRING_GRACE_MS
+    }
+
+    /// Marks the peer unpaired-remotely, drops allowlist + presence, emits
+    /// `device-unpaired`. Returns true when a previously-active record was updated.
+    async fn apply_remote_unpair(&self, endpoint_id: &str) -> bool {
+        let Ok(Some(existing)) = self.paired_store.get(endpoint_id) else {
+            tracing::debug!(
+                target: "dashbeam::_events::pairing::remote_unpair",
+                remote = %crate::node::short_remote(endpoint_id),
+                applied = false,
+                cause = "no stored record",
+            );
+            return false;
+        };
+        if !existing.pairing_status.is_active() {
+            tracing::debug!(
+                target: "dashbeam::_events::pairing::remote_unpair",
+                remote = %crate::node::short_remote(endpoint_id),
+                applied = false,
+                cause = "record not active",
+            );
+            return false;
+        }
+        let marked = self.paired_store.mark_unpaired_remotely(endpoint_id);
+        let Ok(Some(device)) = marked else {
+            tracing::debug!(
+                target: "dashbeam::_events::pairing::remote_unpair",
+                remote = %crate::node::short_remote(endpoint_id),
+                applied = false,
+                cause = "store write failed",
+            );
+            return false;
+        };
+        // `age_ms` separates a genuine unpair from a not-yet-committed pairing.
+        tracing::debug!(
+            target: "dashbeam::_events::pairing::remote_unpair",
+            remote = %crate::node::short_remote(endpoint_id),
+            applied = true,
+            age_ms = protocol::identity::unix_now_ms().saturating_sub(existing.paired_at),
+        );
+        if let Ok(id) = EndpointId::from_str(endpoint_id) {
+            self.access.write().await.allowed.remove(&id);
+        }
+        set_presence(
+            &self.presence,
+            &self.app_handle,
+            &self.paired_store,
+            endpoint_id,
+            false,
+        );
+        let payload = serde_json::json!({
+            "endpoint_id": device.endpoint_id,
+            "display_name": device.display_name,
+            "reason": "remote",
+        });
+        if let Some(handle) = &self.app_handle {
+            let _ = handle.emit_event_with_payload("device-unpaired", &payload.to_string());
+        }
+        true
     }
 
     fn device_still_active(&self, endpoint_id: &str) -> bool {
@@ -445,12 +622,48 @@ impl PairedConnectionManager {
         }
     }
 
+    /// Drop the stored session only when it is still `conn`, so an old teardown
+    /// can't clear a newer live link.
+    async fn remove_session_if(&self, key: &str, conn: &Connection) {
+        let removed = {
+            let mut sessions = self.sessions.write().await;
+            let matches = sessions
+                .get(key)
+                .is_some_and(|current| current.stable_id() == conn.stable_id());
+            if matches {
+                sessions.remove(key).is_some()
+            } else {
+                false
+            }
+        };
+        if removed {
+            set_presence(
+                &self.presence,
+                &self.app_handle,
+                &self.paired_store,
+                key,
+                false,
+            );
+        }
+    }
+
     async fn notify_waiters(&self, key: &str) {
         let mut waiters = self.waiters.lock().await;
         if let Some(waiter) = waiters.remove(key) {
             waiter.notify.notify_waiters();
         }
     }
+}
+
+/// Peer closed after rejecting our Recognition as an unpaired stranger.
+/// (`b"unpaired"` is the ack after *they* processed our Forget — not a signal
+/// that we should mark *them* unpaired-remotely.)
+fn close_implies_remote_unpair(err: &ConnectionError) -> bool {
+    matches!(
+        err,
+        ConnectionError::ApplicationClosed(close)
+            if close.reason.as_ref() == b"not permitted for unpaired peer"
+    )
 }
 
 pub fn invite_wait_timeout() -> Duration {

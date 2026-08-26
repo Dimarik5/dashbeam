@@ -5,7 +5,7 @@ import { IS_WEB } from './platform'
 export const SETTING_FILE = 'settings.json'
 
 export const defaultAppSettings: AppSettingsState = {
-	minimizeToTray: false,
+	minimizeToTray: true,
 	startOnBoot: false,
 	enableNotifications: true,
 	darkMode: false,
@@ -22,6 +22,9 @@ export const defaultAppSettings: AppSettingsState = {
 	pkarrRelayUrl: '',
 	dnsOrigin: '',
 	showBroadcastToggle: false,
+	discoverability: 'everyone',
+	autostartInitialized: false,
+	enableTransferHistory: true,
 }
 
 const webSettingStorage: StateStorage = {

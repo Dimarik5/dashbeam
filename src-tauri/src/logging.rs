@@ -1,12 +1,11 @@
 //! Opt-in diagnostic logging ("debug mode").
 //!
-//! Verbosity is decided **once at startup** and never reconfigured while running.
-//! That is deliberate: it removes the reload layer, means the file sink is either
-//! constructed or not (never swapped), and lets log cleanup run before any appender
-//! exists — deleting an open file fails on Windows.
+//! Verbosity is decided once at startup and never reconfigured while running:
+//! no reload layer, the file sink is either constructed or not, and cleanup can
+//! run before any appender exists (deleting an open file fails on Windows).
 //!
-//! The marker file is the single source of truth, mirroring `is_windows_portable`.
-//! Toggling it takes effect on the next launch.
+//! The marker file is the single source of truth; toggling it takes effect on
+//! the next launch.
 
 use std::fs;
 use std::io::{self, Write};
@@ -26,25 +25,22 @@ const MARKER_FILE: &str = "debug-logging";
 const LOG_PREFIX: &str = "dashbeam-";
 const LOG_SUFFIX: &str = ".log";
 
-/// Size of one log file before rolling to a fresh one. Idle control-plane traffic alone
-/// is roughly 1.5 MB/day, so this is well under a day of history per file.
+/// Roll-over size. Idle control-plane traffic alone is ~1.5 MB/day.
 const MAX_FILE_BYTES: u64 = 1024 * 1024;
 /// Total budget across all retained files.
 const MAX_DIR_BYTES: u64 = 4 * 1024 * 1024;
 /// How many files to keep, oldest discarded first.
 const MAX_SESSION_FILES: usize = 3;
 
-/// Debug mode switches itself off after this long. Someone who enables it to chase one
-/// bug should not still be recording IP addresses and file names months later.
+/// Debug mode expires after this long — chasing one bug shouldn't leave IP
+/// addresses and file names recorded for months.
 const MAX_ENABLED_AGE_SECS: u64 = 7 * 24 * 60 * 60;
 
-/// Targeted rather than a blanket `debug`, which would drown the file in iroh internals.
-///
-/// Note these are *lib target* names, not package names: `sendme-protocol` builds lib
-/// `protocol` and `sendme-native` builds lib `native`, and tracing targets follow the
-/// lib name.
+/// Targeted rather than a blanket `debug`, which drowns the file in iroh
+/// internals. These are lib target names, not package names — `sendme-protocol`
+/// builds lib `protocol`, `sendme-native` builds lib `native`.
 const DEBUG_FILTER: &str = "iroh::_events=debug,protocol=debug,native=debug,engine=debug,\
-     alt_sendme=debug,alt_sendme_lib=debug";
+     dashbeam=debug,dashbeam_lib=debug";
 
 /// Keeps the non-blocking writer's worker thread alive for the process lifetime.
 /// Dropping this silently discards buffered lines.
@@ -75,10 +71,8 @@ fn now_secs() -> u64 {
         .unwrap_or_default()
 }
 
-/// When debug logging was switched on, if it is on.
-///
-/// Returns `None` for a marker written by an older build, which held no timestamp; such
-/// a marker counts as enabled and simply never expires.
+/// When debug logging was switched on, if it is on. `None` for an older build's
+/// marker, which held no timestamp and so never expires.
 pub fn enabled_since(config_dir: &Path) -> Option<u64> {
     fs::read_to_string(marker_path(config_dir))
         .ok()?
@@ -115,11 +109,8 @@ pub fn set_enabled(config_dir: &Path, enabled: bool) -> io::Result<()> {
     }
 }
 
-/// Stdout-only subscriber, used when the app directories cannot be resolved.
-///
-/// Without this, a failure to resolve those paths would leave the process with **no**
-/// subscriber at all — silencing logging entirely, which is worse than the behaviour
-/// before debug mode existed.
+/// Stdout-only subscriber for when the app directories can't be resolved —
+/// otherwise the process would end up with no subscriber at all.
 pub fn init_stdout_only() {
     let _ = tracing_subscriber::registry()
         .with(
@@ -134,11 +125,9 @@ pub fn init_stdout_only() {
         .try_init();
 }
 
-/// Install the global subscriber. Call exactly once, as early as a log dir is known.
-///
-/// Never panics and never blocks startup: any failure degrades to stdout-only logging.
-/// `try_init` is used rather than `init` because the entry point is reachable from both
-/// the desktop binary and the mobile library.
+/// Install the global subscriber. Call exactly once, as early as a log dir is
+/// known. Any failure degrades to stdout-only. `try_init` rather than `init`
+/// because both the desktop binary and the mobile library reach this.
 pub fn init(config_dir: &Path, log_dir: &Path) {
     let stdout_layer = fmt::layer()
         .with_target(true)
@@ -184,8 +173,7 @@ pub fn init(config_dir: &Path, log_dir: &Path) {
         None
     };
 
-    // `Option<Layer>` is itself a Layer; `None` short-circuits, so with debug mode off
-    // there is no file handle and no I/O.
+    // `Option<Layer>` is itself a Layer: `None` means no file handle, no I/O.
     if tracing_subscriber::registry()
         .with(stdout_layer)
         .with(file_layer)
@@ -295,11 +283,8 @@ pub fn read_logs(log_dir: &Path, max_bytes: usize) -> io::Result<String> {
     Ok(out)
 }
 
-/// Rolls to a fresh file at the cap, keeping the **most recent** output.
-///
-/// Simply stopping at the cap would preserve the oldest output instead, which is
-/// backwards for diagnostics: enable debug mode on Monday, hit the bug on Friday, and
-/// the log would be full of Monday with Friday never recorded.
+/// Rolls to a fresh file at the cap, keeping the most recent output — stopping
+/// at the cap would preserve Monday and never record Friday's bug.
 struct RollingWriter {
     dir: PathBuf,
     file: fs::File,
@@ -325,8 +310,7 @@ impl RollingWriter {
         let (file, _) = create_log_file(&self.dir)?;
         self.file = file;
         self.written = 0;
-        // Reclaim older files now; startup pruning alone would let a long-running
-        // session grow without bound.
+        // Startup pruning alone would let a long-running session grow unbounded.
         let _ = prune(&self.dir, true);
         Ok(())
     }
@@ -345,5 +329,79 @@ impl Write for RollingWriter {
 
     fn flush(&mut self) -> io::Result<()> {
         self.file.flush()
+    }
+}
+
+#[cfg(test)]
+mod filter_tests {
+    use super::DEBUG_FILTER;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+    use tracing_subscriber::layer::{Context, SubscriberExt as _};
+    use tracing_subscriber::{EnvFilter, Layer};
+
+    /// Counts events that survive the filter.
+    struct Hits(Arc<AtomicUsize>);
+
+    impl<S: tracing::Subscriber> Layer<S> for Hits {
+        fn on_event(&self, _event: &tracing::Event<'_>, _ctx: Context<'_, S>) {
+            self.0.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    /// A macro, not a loop: `tracing` builds a `static` callsite from the target,
+    /// so it must be a literal.
+    macro_rules! assert_admitted {
+        ($hits:expr, $($target:literal),+ $(,)?) => {
+            $({
+                let before = $hits.load(Ordering::Relaxed);
+                tracing::debug!(target: $target, "filter probe");
+                assert!(
+                    $hits.load(Ordering::Relaxed) > before,
+                    "DEBUG_FILTER drops {}",
+                    $target,
+                );
+            })+
+        };
+    }
+
+    /// A target the filter drops is silently missing from bug-report logs, with
+    /// nothing at the call site to show it.
+    #[test]
+    fn debug_filter_admits_every_diagnostic_target() {
+        let hits = Arc::new(AtomicUsize::new(0));
+        let subscriber = tracing_subscriber::registry()
+            .with(Hits(hits.clone()).with_filter(EnvFilter::new(DEBUG_FILTER)));
+
+        tracing::subscriber::with_default(subscriber, || {
+            assert_admitted!(
+                hits,
+                // Pairing.
+                "dashbeam::_events::pairing::host_open",
+                "dashbeam::_events::pairing::join_attempt",
+                "dashbeam::_events::pairing::join_failed",
+                "dashbeam::_events::pairing::invite_sent",
+                "dashbeam::_events::pairing::invite_response",
+                "dashbeam::_events::pairing::forget",
+                "dashbeam::_events::pairing::nearby_accept",
+                "dashbeam::_events::pairing::nearby_commit",
+                "dashbeam::_events::pairing::remote_unpair",
+                // Nearby / mDNS.
+                "dashbeam::_events::nearby::mdns_advertising",
+                "dashbeam::_events::nearby::mdns_discovered",
+                "dashbeam::_events::nearby::mdns_expired",
+                "dashbeam::_events::nearby::mdns_unavailable",
+                "dashbeam::_events::nearby::observe",
+                "dashbeam::_events::nearby::identity",
+                "dashbeam::_events::nearby::expire",
+                "dashbeam::_events::nearby::probe_started",
+                "dashbeam::_events::nearby::probe_failed",
+                "dashbeam::_events::nearby::discoverability",
+                // Control plane, shared by pairing and nearby.
+                "dashbeam::_events::control::msg_in",
+                "dashbeam::_events::control::msg_out",
+                "dashbeam::_events::control::rejected_unpaired",
+            );
+        });
     }
 }

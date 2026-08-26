@@ -1,7 +1,10 @@
 export interface TransferMetadata {
 	fileName: string
 	fileSize: number
+	/** Time on the wire, as measured by the engine. */
 	duration: number
+	/** Receiver only: time spent writing the files out to disk after transfer. */
+	writeMs?: number
 	startTime: number
 	endTime: number
 	downloadPath?: string
@@ -44,4 +47,9 @@ export interface SuccessScreenProps {
 	onDone: () => void
 	wasStopped?: boolean
 	onOpenFolder?: () => Promise<void>
+	/**
+	 * Hold "Open" disabled — the files are still being written to their final
+	 * destination, so there is nothing to open yet.
+	 */
+	isOpenPending?: boolean
 }

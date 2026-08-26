@@ -26,6 +26,7 @@ import { getPairedSendCounts } from '@/lib/paired-send-counts'
 import { deviceTypeIcon } from '@/lib/device-icon'
 import { copyTextToClipboard } from '@/lib/utils'
 import { DevicePairingStatus } from '../../pairing/DevicePairingStatus'
+import { NearbyDevices } from '../../pairing/NearbyDevices'
 import { PairedDevicesSearchField } from '../../pairing/PairedDevicesSearchField'
 
 function PairJoinModal({
@@ -229,6 +230,12 @@ export function DevicesSettings() {
 	const [renameThisOpen, setRenameThisOpen] = useState(false)
 	const [renamePeerId, setRenamePeerId] = useState<string | null>(null)
 	const [searchQuery, setSearchQuery] = useState('')
+	// Removal waits on delivering `Forget`, which takes seconds when the peer is
+	// listed online but gone. Keyed by endpoint id so one removal doesn't freeze
+	// the other rows' buttons.
+	const [forgettingIds, setForgettingIds] = useState<ReadonlySet<string>>(
+		new Set()
+	)
 	const [copied, setCopied] = useState(false)
 
 	const sortedDevices = useMemo(
@@ -490,6 +497,9 @@ export function DevicesSettings() {
 											{filteredDevices.map((device) => {
 												const Icon = deviceTypeIcon(device.device_type)
 												const isActive = isPairedDeviceActive(device)
+												const isForgetting = forgettingIds.has(
+													device.endpoint_id
+												)
 												return (
 													<li
 														key={device.endpoint_id}
@@ -540,10 +550,20 @@ export function DevicesSettings() {
 																type="button"
 																variant="ghost"
 																size="icon-sm"
-																aria-label={t(
-																	'common:settings.devices.removeDevice'
-																)}
+																disabled={isForgetting}
+																aria-busy={isForgetting}
+																aria-label={
+																	isForgetting
+																		? t(
+																				'common:settings.devices.removingDevice'
+																			)
+																		: t('common:settings.devices.removeDevice')
+																}
 																onClick={async () => {
+																	if (isForgetting) return
+																	setForgettingIds((prev) =>
+																		new Set(prev).add(device.endpoint_id)
+																	)
 																	try {
 																		await forget(device.endpoint_id)
 																		toastManager.add({
@@ -560,10 +580,22 @@ export function DevicesSettings() {
 																			),
 																			type: 'error',
 																		})
+																	} finally {
+																		// The row unmounts on success, but this
+																		// state lives on the list.
+																		setForgettingIds((prev) => {
+																			const next = new Set(prev)
+																			next.delete(device.endpoint_id)
+																			return next
+																		})
 																	}
 																}}
 															>
-																<Trash2 className="w-4 h-4" />
+																{isForgetting ? (
+																	<Loader2 className="w-4 h-4 animate-spin" />
+																) : (
+																	<Trash2 className="w-4 h-4" />
+																)}
 															</Button>
 														</div>
 													</li>
@@ -575,6 +607,8 @@ export function DevicesSettings() {
 							)}
 						</FramePanel>
 					</Frame>
+
+					<NearbyDevices />
 
 					<PairJoinModal
 						open={joinOpen}

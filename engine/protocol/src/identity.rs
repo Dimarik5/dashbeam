@@ -398,6 +398,88 @@ mod tests {
     }
 }
 
+#[cfg(test)]
+mod fingerprint_tests {
+    use super::short_fingerprint;
+
+    #[test]
+    fn formats_as_three_groups_of_four() {
+        let id = "00".repeat(32);
+        assert_eq!(short_fingerprint(&id).unwrap(), "AAAA-AAAA-AAAA");
+    }
+
+    #[test]
+    fn is_uppercase_base32_and_grouped() {
+        let id = "ff".repeat(32);
+        let fp = short_fingerprint(&id).unwrap();
+        assert_eq!(fp.len(), 14, "12 chars plus 2 dashes");
+        assert_eq!(fp.matches('-').count(), 2);
+        assert!(
+            fp.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '-'),
+            "base32 alphabet is A-Z and 2-7: {fp}"
+        );
+    }
+
+    #[test]
+    fn is_deterministic() {
+        let id = "a1b2c3d4".repeat(8);
+        assert_eq!(short_fingerprint(&id), short_fingerprint(&id));
+    }
+
+    #[test]
+    fn distinct_keys_give_distinct_fingerprints() {
+        // Vary an EARLY byte: the fingerprint is the first 60 bits, so keys
+        // differing only late collide by construction.
+        let a = "00".repeat(32);
+        let b = format!("01{}", "00".repeat(31));
+        assert_ne!(short_fingerprint(&a), short_fingerprint(&b));
+    }
+
+    #[test]
+    fn rejects_wrong_length() {
+        assert_eq!(short_fingerprint(&"00".repeat(16)), None);
+        assert_eq!(short_fingerprint(&"00".repeat(64)), None);
+    }
+
+    #[test]
+    fn rejects_non_hex() {
+        assert_eq!(short_fingerprint(&"zz".repeat(32)), None);
+    }
+
+    #[test]
+    fn tolerates_surrounding_whitespace() {
+        let id = format!("  {}  ", "00".repeat(32));
+        assert_eq!(short_fingerprint(&id).unwrap(), "AAAA-AAAA-AAAA");
+    }
+}
+
+/// Human-comparable fingerprint of an endpoint id, shown on both screens when
+/// two devices first meet. iroh's TLS binds the connection to the peer's public
+/// key, so a matching fingerprint proves who you're talking to; display names
+/// are spoofable, this isn't.
+///
+/// 12 base32 chars = 60 bits. No hashing needed: truncating a uniform public key
+/// stays uniform, and it isn't secret. `None` for a non-64-char-hex id.
+pub fn short_fingerprint(endpoint_id_hex: &str) -> Option<String> {
+    let bytes = data_encoding::HEXLOWER_PERMISSIVE
+        .decode(endpoint_id_hex.trim().as_bytes())
+        .ok()?;
+    if bytes.len() != 32 {
+        return None;
+    }
+    let encoded = data_encoding::BASE32_NOPAD.encode(&bytes);
+    let grouped = encoded
+        .as_bytes()
+        .iter()
+        .take(12)
+        .collect::<Vec<_>>()
+        .chunks(4)
+        .map(|chunk| chunk.iter().map(|b| **b as char).collect::<String>())
+        .collect::<Vec<_>>()
+        .join("-");
+    Some(grouped)
+}
+
 pub fn normalize_display_name(name: &str) -> Result<String, String> {
     let trimmed = name.trim();
     if trimmed.is_empty() {

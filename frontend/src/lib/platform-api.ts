@@ -239,6 +239,17 @@ function invokeWebStub<T>(cmd: string, args?: Record<string, unknown>): T {
 			return null as T
 		case 'list_paired_devices':
 			return [] as T
+		// Transfer history is desktop/Android only: the browser receive path
+		// writes through a directory handle or a zip download, so "where it
+		// saved" has no stable meaning to record.
+		case 'list_transfer_history':
+			return [] as T
+		case 'get_transfer_temp_data':
+			return { exists: false, sizeBytes: 0 } as T
+		case 'delete_transfer_record':
+		case 'clear_transfer_history':
+		case 'clear_transfer_temp_data':
+			return undefined as T
 		case 'start_pairing_host':
 		case 'join_pairing':
 		case 'forget_paired_device':
@@ -247,6 +258,21 @@ function invokeWebStub<T>(cmd: string, args?: Record<string, unknown>): T {
 		case 'stop_pairing_host':
 		case 'reconfigure_node_relay':
 			return undefined as T
+		case 'list_nearby':
+			// Browsers have no multicast; Nearby is native-only.
+			return [] as unknown as T
+		case 'nearby_status':
+			return { reason: null } as unknown as T
+		case 'get_discoverability':
+			return 'off' as unknown as T
+		case 'set_discoverability':
+			return undefined as unknown as T
+		case 'invite_nearby_device':
+			throw new WebPreviewError('invite_nearby_device')
+		case 'request_nearby_pair':
+			throw new WebPreviewError('request_nearby_pair')
+		case 'respond_nearby_invite':
+			throw new WebPreviewError('respond_nearby_invite')
 		case 'toggle_context_menu':
 		case 'plugin:native-utils|select_send_document':
 		case 'plugin:native-utils|select_send_folder':
@@ -256,6 +282,14 @@ function invokeWebStub<T>(cmd: string, args?: Record<string, unknown>): T {
 			return null as T
 		case 'is_windows_portable':
 			return false as T
+		case 'autostart_is_enabled':
+			return null as T
+		case 'autostart_set':
+			return false as T
+		case 'set_background_on_close':
+		case 'set_tray_labels':
+		case 'show_system_notification':
+			return undefined as unknown as T
 		default:
 			console.warn(`[web] unhandled invoke: ${cmd}`)
 			throw new WebPreviewError()

@@ -1,11 +1,17 @@
 use crate::features::thumbnail::generate_thumbnail;
+use crate::history::{
+    history_enabled, partial_store_path_for, CompletionFacts, HistoryRecordingEmitter,
+    TransferContext,
+};
 use crate::state::{AppStateMutex, ShareHandle};
 use engine::{
     build_discovery_mode, download, fetch_metadata, get_relay_status as engine_get_relay_status,
     resolve_relay_mode_with_fallback, start_share_items,
     verify_discovery as engine_verify_discovery, verify_relays as engine_verify_relays,
-    AddrInfoOptions, AppHandle, DeviceInfo, EventEmitter, FileMetadata, FilePreviewItem,
-    NodeService, PairedDevice, PairedDeviceInfo, ReceiveOptions, SendOptions,
+    AddrInfoOptions, AppHandle, DeviceInfo, Discoverability, EventEmitter, FileMetadata,
+    FilePreviewItem, NearbyDevice, NodeService, PairedDevice, PairedDeviceInfo, ReceiveOptions,
+    SendOptions, TransferDirection, TransferHistoryStore, TransferPathType, TransferPeer,
+    TransferRecord, TransferStatus,
 };
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -37,6 +43,105 @@ pub async fn get_relay_status(
 // Wrapper for Tauri AppHandle that implements EventEmitter
 struct TauriEventEmitter {
     app_handle: tauri::AppHandle,
+}
+
+/// Builds the emitter the engine reports through, wrapping it in a history
+/// recorder unless the user turned recording off.
+///
+/// Returns the recorder separately so cancel paths, which see no engine event,
+/// can still close the row.
+fn build_emitter(
+    app_handle: &tauri::AppHandle,
+    history: &State<'_, Arc<TransferHistoryStore>>,
+    direction: TransferDirection,
+    context: TransferContext,
+) -> (AppHandle, Option<Arc<HistoryRecordingEmitter>>) {
+    let base: Arc<dyn engine::EventEmitter> = Arc::new(TauriEventEmitter {
+        app_handle: app_handle.clone(),
+    });
+
+    let Ok(data_dir) = app_handle.path().app_data_dir() else {
+        return (Some(base), None);
+    };
+    if !history_enabled(&data_dir) {
+        return (Some(base), None);
+    }
+
+    let recorder = Arc::new(HistoryRecordingEmitter::new(
+        base,
+        history.inner().clone(),
+        direction,
+        context,
+    ));
+    (Some(recorder.clone()), Some(recorder))
+}
+
+/// The node service, if pairing came up. Its absence is not fatal — history
+/// just records an endpoint id with no name.
+#[cfg(any(desktop, target_os = "android"))]
+async fn app_state_node(state: &State<'_, AppStateMutex>) -> Option<Arc<NodeService>> {
+    state.lock().await.node.clone()
+}
+
+#[cfg(not(any(desktop, target_os = "android")))]
+async fn app_state_node(_state: &State<'_, AppStateMutex>) -> Option<Arc<NodeService>> {
+    None
+}
+
+/// Names an endpoint id from the paired-device list. The snapshot is stored
+/// alongside the id so a forgotten device keeps its name in past rows.
+fn name_peer(endpoint_id: String, node: &Option<Arc<NodeService>>) -> TransferPeer {
+    let known = node
+        .as_ref()
+        .and_then(|node| node.list_paired().ok())
+        .and_then(|devices| {
+            devices
+                .into_iter()
+                .find(|d| d.endpoint_id.eq_ignore_ascii_case(&endpoint_id))
+        });
+
+    match known {
+        Some(device) => TransferPeer {
+            endpoint_id,
+            display_name: Some(device.display_name),
+            device_type: Some(device.device_type),
+        },
+        None => TransferPeer {
+            endpoint_id,
+            display_name: None,
+            device_type: None,
+        },
+    }
+}
+
+/// The sender behind a ticket. Every ticket carries its origin endpoint id, so
+/// this works for a pasted ticket as well as a paired invite.
+fn sender_peer_from_ticket(ticket: &str, node: &Option<Arc<NodeService>>) -> Option<TransferPeer> {
+    use iroh_blobs::ticket::BlobTicket;
+    use std::str::FromStr;
+
+    let ticket = BlobTicket::from_str(ticket).ok()?;
+    let endpoint_id = ticket.addr().id.to_string();
+    Some(name_peer(endpoint_id, node))
+}
+
+/// Attributes the active share to a device, when the UI targeted one.
+fn note_share_peer(app_state: &crate::state::AppState, peer: TransferPeer) {
+    if let Some(recorder) = app_state
+        .current_share
+        .as_ref()
+        .and_then(|share| share.recorder.as_ref())
+    {
+        recorder.note_invited_peer(peer);
+    }
+}
+
+fn path_type_from_mime(mime: Option<&str>) -> Option<TransferPathType> {
+    match mime {
+        Some("inode/directory") => Some(TransferPathType::Directory),
+        Some(_) => Some(TransferPathType::File),
+        None => None,
+    }
 }
 
 impl EventEmitter for TauriEventEmitter {
@@ -97,9 +202,10 @@ pub async fn start_sharing(
     relay: Option<RelayConfigArg>,
     discovery: Option<DiscoveryConfigArg>,
     state: State<'_, AppStateMutex>,
+    history: State<'_, Arc<TransferHistoryStore>>,
     app_handle: tauri::AppHandle,
 ) -> Result<String, String> {
-    send_items(vec![path], relay, discovery, state, app_handle).await
+    send_items(vec![path], relay, discovery, state, history, app_handle).await
 }
 
 /// New interface to start_sharing multiple items at once
@@ -109,6 +215,7 @@ pub async fn send_items(
     relay: Option<RelayConfigArg>,
     discovery: Option<DiscoveryConfigArg>,
     state: State<'_, AppStateMutex>,
+    history: State<'_, Arc<TransferHistoryStore>>,
     app_handle: tauri::AppHandle,
 ) -> Result<String, String> {
     // Validate input before doing any work.
@@ -148,18 +255,25 @@ pub async fn send_items(
             magic_ipv6_addr: None,
         };
 
-        // Wrap the app_handle in our EventEmitter implementation.
-        let emitter = Arc::new(TauriEventEmitter {
-            app_handle: app_handle.clone(),
-        });
-        let boxed_handle: AppHandle = Some(emitter);
+        // Known before the first byte moves; the row opens on first pull.
+        let (boxed_handle, recorder) = build_emitter(
+            &app_handle,
+            &history,
+            TransferDirection::Send,
+            TransferContext {
+                root_name: metadata.file_name.clone(),
+                payload_bytes: metadata.size,
+                item_count: metadata.item_count,
+                path_type: path_type_from_mime(metadata.mime_type.as_deref()),
+                ..Default::default()
+            },
+        );
 
         // Ephemeral share — relay settings apply per session (all platforms including Android).
         let result = start_share_items(path_bufs.clone(), options, &boxed_handle, Some(metadata))
             .await
             .map_err(|error| {
-                // The send path had no failure logging, so sender-side bug reports
-                // showed connection setup and then nothing.
+                // Without this, sender-side bug reports end at connection setup.
                 tracing::error!(
                     target: "dashbeam::_events::transfer::send_failed",
                     item_count = path_bufs.len(),
@@ -172,12 +286,16 @@ pub async fn send_items(
             // actually started with the resolved relay mode.
             let _ = app_handle.emit("relay-fell-back", payload);
         }
-        Ok((result.ticket.clone(), path_bufs, result))
+        if let Some(recorder) = recorder.as_ref() {
+            let hash = result.hash.clone();
+            recorder.update_context(|context| context.blob_hash = Some(hash));
+        }
+        Ok((result.ticket.clone(), path_bufs, result, recorder))
     }
     .await;
 
     match start_result {
-        Ok((ticket, paths, result)) => {
+        Ok((ticket, paths, result, recorder)) => {
             let mut app_state = state.lock().await;
             app_state.is_share_starting = false;
 
@@ -187,7 +305,8 @@ pub async fn send_items(
 
             // Keep full send result alive to preserve router/temp_tag lifecycle.
             let primary = paths.first().cloned().unwrap_or_else(|| PathBuf::from("."));
-            app_state.current_share = Some(ShareHandle::new(ticket.clone(), primary, result));
+            app_state.current_share =
+                Some(ShareHandle::new(ticket.clone(), primary, result, recorder));
             Ok(ticket)
         }
         Err(e) => {
@@ -305,6 +424,10 @@ pub async fn stop_sharing(state: State<'_, AppStateMutex>) -> Result<(), String>
     let mut app_state = state.lock().await;
 
     if let Some(mut share) = app_state.current_share.take() {
+        if let Some(recorder) = share.recorder.as_ref() {
+            // No-op if a terminal event already closed the row.
+            recorder.finalize(TransferStatus::Cancelled, CompletionFacts::default(), None);
+        }
         if let Err(e) = share.stop().await {
             return Err(e);
         }
@@ -330,6 +453,7 @@ pub async fn receive_file(
     relay: Option<RelayConfigArg>,
     discovery: Option<DiscoveryConfigArg>,
     state: State<'_, AppStateMutex>,
+    history: State<'_, Arc<TransferHistoryStore>>,
     app_handle: tauri::AppHandle,
 ) -> Result<String, String> {
     use iroh_blobs::ticket::BlobTicket;
@@ -371,10 +495,24 @@ pub async fn receive_file(
         }
     }
 
-    let emitter = Arc::new(TauriEventEmitter {
-        app_handle: app_handle.clone(),
-    });
-    let boxed_handle: AppHandle = Some(emitter);
+    // The sender's endpoint id rides in the ticket, so the peer is known before
+    // the connection exists. `resumable_store_path` is set at open, not finalize
+    // — a crash never reaches finalize, stranding the partial store.
+    let sender_peer = sender_peer_from_ticket(&ticket, &app_state_node(&state).await);
+    let (boxed_handle, recorder) = build_emitter(
+        &app_handle,
+        &history,
+        TransferDirection::Receive,
+        TransferContext {
+            blob_hash: incoming_hash.clone(),
+            save_path: Some(output_dir.to_string_lossy().to_string()),
+            resumable_store_path: incoming_hash
+                .as_deref()
+                .map(|hash| partial_store_path_for(hash).to_string_lossy().to_string()),
+            peer: sender_peer,
+            ..Default::default()
+        },
+    );
 
     if let Some(payload) = relay_fallback_event_payload("receive", fell_back_to_public) {
         let _ = app_handle.emit("relay-fell-back", payload);
@@ -390,6 +528,7 @@ pub async fn receive_file(
             );
         }
         app_state.current_receive_cancel = Some(cancel_tx);
+        app_state.current_receive_hash = incoming_hash.clone();
     }
 
     let result = download(ticket, options, boxed_handle, cancel_rx).await;
@@ -398,6 +537,7 @@ pub async fn receive_file(
     {
         let mut app_state = state.lock().await;
         app_state.current_receive_cancel = None;
+        app_state.current_receive_hash = None;
         match &result {
             Err(e) if e.to_string() == "cancelled" => {
                 // Record the hash so the next receive can decide whether to delete this partial.
@@ -411,6 +551,21 @@ pub async fn receive_file(
                     app_state.last_cancelled_recv_hash = incoming_hash;
                 }
             }
+        }
+    }
+
+    if let Some(recorder) = recorder.as_ref() {
+        match &result {
+            // Success already closed the row from `receive-completed`.
+            Ok(_) => {}
+            Err(e) if e.to_string() == "cancelled" => {
+                recorder.finalize(TransferStatus::Cancelled, CompletionFacts::default(), None)
+            }
+            Err(e) => recorder.finalize(
+                TransferStatus::Failed,
+                CompletionFacts::default(),
+                Some(e.to_string()),
+            ),
         }
     }
 
@@ -437,8 +592,24 @@ pub async fn receive_file(
     }
 }
 
+/// Move a finished receive out of staging, bracketed by a completion event.
+///
+/// `receive-completed` fires before this re-copies the bytes out, so the
+/// success screen is up while the destination doesn't exist yet. Emitting on
+/// the way out gives the UI one signal for "the files are where they belong".
 #[cfg(target_os = "android")]
 fn finalize_android_receive(
+    app_handle: &tauri::AppHandle,
+    staging_dir: &Path,
+    tree_uri: Option<&str>,
+) -> Result<(), String> {
+    let result = export_android_receive(app_handle, staging_dir, tree_uri);
+    let _ = app_handle.emit("receive-export-finished", ());
+    result
+}
+
+#[cfg(target_os = "android")]
+fn export_android_receive(
     app_handle: &tauri::AppHandle,
     staging_dir: &Path,
     tree_uri: Option<&str>,
@@ -448,8 +619,7 @@ fn finalize_android_receive(
     let tree_uri = tree_uri.map(str::trim).filter(|uri| !uri.is_empty());
 
     let Some(tree_uri) = tree_uri else {
-        emit_receive_download_fallback(app_handle, staging_dir, "private");
-        return Ok(());
+        return finalize_android_media_store_receive(app_handle, staging_dir);
     };
 
     let export_result = app_handle.native_utils().export_to_tree(ExportToTreeArgs {
@@ -477,6 +647,61 @@ fn finalize_android_receive(
             tracing::warn!("SAF export failed, keeping app-private files: {e}");
             emit_receive_download_fallback(app_handle, staging_dir, "saf");
             // Transfer itself succeeded — files remain in staging.
+            Ok(())
+        }
+    }
+}
+
+/// Export a finished receive into the public `Download/DashBeam` collection —
+/// the zero-configuration path, no folder picked or permission prompted. Files
+/// left in app-private staging can't be opened, so a failed export falls back
+/// and tells the user where they ended up.
+#[cfg(target_os = "android")]
+fn finalize_android_media_store_receive(
+    app_handle: &tauri::AppHandle,
+    staging_dir: &Path,
+) -> Result<(), String> {
+    use tauri_plugin_native_utils::{
+        ExportToMediaStoreArgs, NativeUtilsExt, MEDIA_STORE_UNSUPPORTED,
+    };
+
+    let export_result = app_handle
+        .native_utils()
+        .export_to_media_store(ExportToMediaStoreArgs {
+            source_dir: staging_dir.to_string_lossy().into_owned(),
+        });
+
+    match export_result {
+        Ok(result) => {
+            tracing::info!(
+                exported = result.exported_count,
+                conflicts = result.conflicts.len(),
+                path = %result.display_path,
+                "Exported received files to the Downloads collection"
+            );
+            if let Err(e) = std::fs::remove_dir_all(staging_dir) {
+                tracing::warn!(
+                    "Failed to clean staging dir after MediaStore export ({}): {}",
+                    staging_dir.display(),
+                    e
+                );
+            }
+            let payload = serde_json::json!({
+                "path": result.display_path,
+                "uris": result.uris,
+            });
+            let _ = app_handle.emit("receive-download-mediastore", payload);
+            Ok(())
+        }
+        Err(e) => {
+            let message = e.to_string();
+            if message.contains(MEDIA_STORE_UNSUPPORTED) {
+                tracing::info!("MediaStore unavailable on this device; keeping app-private files");
+            } else {
+                tracing::warn!("MediaStore export failed, keeping app-private files: {message}");
+            }
+            // Transfer itself succeeded — files remain in staging.
+            emit_receive_download_fallback(app_handle, staging_dir, "private");
             Ok(())
         }
     }
@@ -678,11 +903,9 @@ pub fn is_windows_portable() -> bool {
     crate::platform::windows::portable::is_portable()
 }
 
-/// State of the debug-logging toggle.
-///
-/// `enabled` is the persisted marker; `active_this_session` is whether the file sink was
-/// actually installed at launch. They disagree between toggling and restarting, which is
-/// what the UI's "restart required" hint keys off.
+/// State of the debug-logging toggle. `enabled` is persisted;
+/// `active_this_session` is whether the file sink was installed at launch —
+/// they disagree between toggling and restarting, which drives the UI hint.
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DebugLoggingState {
@@ -715,10 +938,9 @@ pub fn get_debug_logging(app: tauri::AppHandle) -> Result<DebugLoggingState, Str
     })
 }
 
-/// Takes effect on the next launch — the subscriber is never reconfigured while running.
-///
-/// Turning it off also purges immediately rather than waiting for a relaunch, so
-/// "off" means the logs are gone even if the app is never reopened.
+/// Takes effect next launch; the subscriber is never reconfigured while
+/// running. Turning it off purges immediately, so "off" means the logs are gone
+/// even if the app is never reopened.
 #[tauri::command]
 pub fn set_debug_logging(app: tauri::AppHandle, enabled: bool) -> Result<(), String> {
     let config_dir = app_config_dir(&app)?;
@@ -727,8 +949,8 @@ pub fn set_debug_logging(app: tauri::AppHandle, enabled: bool) -> Result<(), Str
 
     if !enabled {
         if let Ok(log_dir) = app_log_dir(&app) {
-            // Best-effort: the file for the current session may still be open on
-            // Windows, and startup pruning finishes the job either way.
+            // Best-effort: the current session's file may still be open on
+            // Windows, and startup pruning finishes the job.
             let _ = crate::logging::clear(&log_dir);
         }
     }
@@ -745,10 +967,8 @@ pub fn clear_debug_logs(app: tauri::AppHandle) -> Result<(), String> {
 /// Largest bundle we will write. Comfortably under GitHub's attachment limit.
 const MAX_BUNDLE_BYTES: usize = 5 * 1024 * 1024;
 
-/// Write a metadata header plus captured logs to `dest_path`.
-///
-/// Everything is assembled here rather than in the frontend so the file is complete even
-/// if the UI is partly broken.
+/// Write a metadata header plus captured logs to `dest_path`. Assembled here
+/// rather than in the frontend so a partly broken UI still produces a full file.
 #[tauri::command]
 pub async fn export_debug_bundle(
     app: tauri::AppHandle,
@@ -765,8 +985,7 @@ pub async fn export_debug_bundle(
         "App version: {}\n",
         crate::version::get_app_version()
     ));
-    // `std::env::consts::OS` alone gives "macos" with no version, which is not enough
-    // to triage platform-specific bugs.
+    // `std::env::consts::OS` gives "macos" with no version.
     out.push_str(&format!(
         "OS: {} {} ({})\n",
         tauri_plugin_os::platform(),
@@ -778,8 +997,7 @@ pub async fn export_debug_bundle(
         crate::logging::is_active()
     ));
 
-    // Relay configuration is the first question for any connectivity report, and the
-    // frontend is the only place that knows what the user selected.
+    // Only the frontend knows which relay the user selected.
     match relay.as_ref() {
         Some(config) => {
             out.push_str(&format!("Relay mode: {}\n", config.mode));
@@ -951,6 +1169,58 @@ pub async fn verify_discovery(
     engine_verify_discovery(discovery).await
 }
 
+/// Reads `discoverability` out of the raw `settings.json` the frontend's
+/// `useAppSettingStore` writes (zustand `persist` envelope under
+/// `app_settings`). `None` when missing or malformed — callers default.
+#[cfg(any(desktop, target_os = "android", test))]
+fn parse_persisted_discoverability(raw: &str) -> Option<Discoverability> {
+    let file: serde_json::Value = serde_json::from_str(raw).ok()?;
+    let envelope: serde_json::Value =
+        serde_json::from_str(file.get("app_settings")?.as_str()?).ok()?;
+    serde_json::from_value(envelope.get("state")?.get("discoverability")?.clone()).ok()
+}
+
+/// Reads the persisted discoverability choice before `NodeService::start`, so
+/// an `Off` install never registers mDNS even briefly (`DeviceNodeSync`
+/// re-applies it once the webview loads).
+///
+/// A raw file read, not `StoreExt::store`: loading the store Rust-side would
+/// register it without the frontend's `LazyStore` options, and the plugin
+/// reuses whichever instance registered first.
+#[cfg(any(desktop, target_os = "android"))]
+fn load_persisted_discoverability(app_handle: &tauri::AppHandle) -> Discoverability {
+    let Ok(data_dir) = app_handle.path().app_data_dir() else {
+        return Discoverability::default();
+    };
+    let Ok(raw) = std::fs::read_to_string(data_dir.join("settings.json")) else {
+        return Discoverability::default();
+    };
+    parse_persisted_discoverability(&raw).unwrap_or_default()
+}
+
+/// Reads `minimizeToTray` out of `settings.json` — same envelope and same
+/// raw-read reasoning as `parse_persisted_discoverability`.
+#[cfg(any(desktop, test))]
+fn parse_persisted_minimize_to_tray(raw: &str) -> Option<bool> {
+    let file: serde_json::Value = serde_json::from_str(raw).ok()?;
+    let envelope: serde_json::Value =
+        serde_json::from_str(file.get("app_settings")?.as_str()?).ok()?;
+    envelope.get("state")?.get("minimizeToTray")?.as_bool()
+}
+
+/// The "keep running in the background" choice, read before the first window
+/// close. Defaults to `true` — every existing install already closes to tray.
+#[cfg(desktop)]
+pub fn load_persisted_minimize_to_tray(app_handle: &tauri::AppHandle) -> bool {
+    let Ok(data_dir) = app_handle.path().app_data_dir() else {
+        return true;
+    };
+    let Ok(raw) = std::fs::read_to_string(data_dir.join("settings.json")) else {
+        return true;
+    };
+    parse_persisted_minimize_to_tray(&raw).unwrap_or(true)
+}
+
 #[cfg(any(desktop, target_os = "android"))]
 pub async fn init_node_service(app_handle: tauri::AppHandle) -> Result<(), String> {
     let data_dir = app_handle
@@ -961,18 +1231,34 @@ pub async fn init_node_service(app_handle: tauri::AppHandle) -> Result<(), Strin
     let (relay_mode, _) = resolve_relay_mode_with_fallback(None).await?;
     let relay_mode: iroh::endpoint::RelayMode = relay_mode.into();
     let discovery_mode = build_discovery_mode(None)?;
+    let discoverability = load_persisted_discoverability(&app_handle);
 
     let emitter = Arc::new(TauriEventEmitter {
         app_handle: app_handle.clone(),
     });
     let boxed_handle: AppHandle = Some(emitter);
-    let node = NodeService::start(&data_dir, relay_mode, discovery_mode, boxed_handle)
-        .await
-        .map_err(|e| format!("Failed to start device node: {e}"))?;
+    let node = NodeService::start(
+        &data_dir,
+        relay_mode,
+        discovery_mode,
+        discoverability,
+        boxed_handle,
+    )
+    .await
+    .map_err(|e| format!("Failed to start device node: {e}"))?;
     let state = app_handle.state::<AppStateMutex>();
-    let mut guard = state.lock().await;
-    guard.node = Some(Arc::new(node));
-    guard.node_init_error = None;
+    {
+        let mut guard = state.lock().await;
+        guard.node = Some(Arc::new(node));
+        guard.node_init_error = None;
+    }
+
+    // Scoped above so the lock is released first: `refresh` takes it again.
+    #[cfg(target_os = "android")]
+    {
+        let state = state.inner().clone();
+        crate::presence_service::refresh(&app_handle, &state).await;
+    }
 
     Ok(())
 }
@@ -1218,6 +1504,7 @@ pub async fn list_paired_devices(
 pub async fn forget_paired_device(
     endpoint_id: String,
     state: State<'_, AppStateMutex>,
+    #[allow(unused_variables)] app_handle: tauri::AppHandle,
 ) -> Result<(), String> {
     let node = {
         let guard = state.lock().await;
@@ -1226,6 +1513,14 @@ pub async fn forget_paired_device(
     node.forget_paired(&endpoint_id)
         .await
         .map_err(|e| e.to_string())?;
+
+    // A local forget emits no `device-unpaired` (only a remote one does), so
+    // the listener in `lib.rs` would not see this — refresh explicitly.
+    #[cfg(target_os = "android")]
+    {
+        let state = state.inner().clone();
+        crate::presence_service::refresh(&app_handle, &state).await;
+    }
 
     Ok(())
 }
@@ -1246,6 +1541,8 @@ pub async fn invite_paired_device(
 ) -> Result<InviteDelivered, String> {
     let node = {
         let guard = state.lock().await;
+        // The recipient is known here; `share-peer-connected` carries only an id.
+        note_share_peer(&guard, name_peer(endpoint_id.clone(), &guard.node));
         require_node_arc(&guard)?
     };
     let delivered = node
@@ -1274,6 +1571,265 @@ pub async fn respond_paired_invite(
     Ok(())
 }
 
+#[cfg(any(desktop, target_os = "android"))]
+#[tauri::command]
+pub async fn list_nearby(state: State<'_, AppStateMutex>) -> Result<Vec<NearbyDevice>, String> {
+    let node = {
+        let guard = state.lock().await;
+        require_node_arc(&guard)?
+    };
+    Ok(node.list_nearby().await)
+}
+
+#[cfg(any(desktop, target_os = "android"))]
+#[tauri::command]
+pub async fn get_discoverability(
+    state: State<'_, AppStateMutex>,
+) -> Result<Discoverability, String> {
+    let node = {
+        let guard = state.lock().await;
+        require_node_arc(&guard)?
+    };
+    Ok(node.discoverability().await)
+}
+
+/// The frontend seam is `setDiscoverability` in
+/// `frontend/src/lib/pairing-api.ts` — its invoke payload key must match this
+/// command's `setting` parameter name.
+#[cfg(any(desktop, target_os = "android"))]
+#[tauri::command]
+pub async fn set_discoverability(
+    setting: Discoverability,
+    state: State<'_, AppStateMutex>,
+    #[allow(unused_variables)] app_handle: tauri::AppHandle,
+) -> Result<(), String> {
+    let node = {
+        let guard = state.lock().await;
+        require_node_arc(&guard)?
+    };
+    node.set_discoverability(setting).await.map_err(|error| {
+        tracing::error!(
+            target: "dashbeam::_events::nearby::set_discoverability_failed",
+            ?setting,
+            %error,
+        );
+        format!("Failed to update discoverability: {error}")
+    })?;
+
+    // Turning discovery off can retire the background service, but only when
+    // no paired device still needs presence held open.
+    #[cfg(target_os = "android")]
+    {
+        let state = state.inner().clone();
+        crate::presence_service::refresh(&app_handle, &state).await;
+    }
+
+    Ok(())
+}
+
+#[derive(serde::Serialize)]
+pub struct NearbyStatusResponse {
+    /// Why LAN discovery is unavailable (mDNS pump failed to start), or
+    /// `None` when it's running or deliberately off. Queryable because the
+    /// `nearby-unavailable` event can fire during node init, before the
+    /// frontend has any listener registered.
+    pub reason: Option<String>,
+}
+
+#[cfg(any(desktop, target_os = "android"))]
+#[tauri::command]
+pub async fn nearby_status(
+    state: State<'_, AppStateMutex>,
+) -> Result<NearbyStatusResponse, String> {
+    let node = {
+        let guard = state.lock().await;
+        require_node_arc(&guard)?
+    };
+    Ok(NearbyStatusResponse {
+        reason: node.nearby_unavailable_reason(),
+    })
+}
+
+/// Delivers the caller's active share ticket to a Nearby device over the
+/// control ALPN — same path as `invite_paired_device`. The receiver's
+/// fingerprint confirmation is what promotes the peer to paired.
+#[cfg(any(desktop, target_os = "android"))]
+#[tauri::command]
+pub async fn invite_nearby_device(
+    endpoint_id: String,
+    blob_ticket: String,
+    file_count: u32,
+    total_size: u64,
+    state: State<'_, AppStateMutex>,
+) -> Result<InviteDelivered, String> {
+    let node = {
+        let guard = state.lock().await;
+        require_node_arc(&guard)?
+    };
+
+    // A Nearby device's name lives only in the discovery cache, and
+    // `list_nearby` is async — out of reach of the synchronous emitter path.
+    let nearby_peer = node
+        .list_nearby()
+        .await
+        .into_iter()
+        .find(|d| d.endpoint_id.eq_ignore_ascii_case(&endpoint_id))
+        .map(|d| TransferPeer {
+            endpoint_id: d.endpoint_id,
+            display_name: d.display_name,
+            device_type: d.device_type,
+        })
+        .unwrap_or_else(|| TransferPeer {
+            endpoint_id: endpoint_id.clone(),
+            display_name: None,
+            device_type: None,
+        });
+    note_share_peer(&*state.lock().await, nearby_peer);
+    let delivered = node
+        .invite_nearby_device(&endpoint_id, &blob_ticket, file_count, total_size)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    Ok(InviteDelivered { delivered })
+}
+
+/// Asks a Nearby device to pair (no file share). Receiver confirms on name /
+/// device type; accept reuses `respond_nearby_invite`.
+#[cfg(any(desktop, target_os = "android"))]
+#[tauri::command]
+pub async fn request_nearby_pair(
+    endpoint_id: String,
+    state: State<'_, AppStateMutex>,
+) -> Result<InviteDelivered, String> {
+    let node = {
+        let guard = state.lock().await;
+        require_node_arc(&guard)?
+    };
+    let delivered = node
+        .request_nearby_pair(&endpoint_id)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    Ok(InviteDelivered { delivered })
+}
+
+#[cfg(any(desktop, target_os = "android"))]
+#[tauri::command]
+pub async fn respond_nearby_invite(
+    endpoint_id: String,
+    accept: bool,
+    block: bool,
+    state: State<'_, AppStateMutex>,
+) -> Result<(), String> {
+    let node = {
+        let guard = state.lock().await;
+        require_node_arc(&guard)?
+    };
+    let result = if accept {
+        node.accept_nearby_invite(&endpoint_id).await
+    } else {
+        node.decline_nearby_invite(&endpoint_id, block).await
+    };
+    result.map_err(|e| e.to_string())
+}
+
+/// Show a desktop notification that stays as long as the OS allows. The Tauri
+/// notification plugin exposes no timeout API and defaults to a couple of
+/// seconds, so invite toasts go through notify-rust with `Timeout::Never`.
+#[cfg(desktop)]
+#[tauri::command]
+pub fn show_system_notification(
+    app: tauri::AppHandle,
+    title: String,
+    body: Option<String>,
+    icon: Option<String>,
+) -> Result<(), String> {
+    let mut notification = notify_rust::Notification::new();
+    let app_name = app
+        .config()
+        .product_name
+        .clone()
+        .unwrap_or_else(|| "DashBeam".into());
+    notification.appname(&app_name);
+    notification.summary(&title);
+    if let Some(body) = body.as_deref() {
+        notification.body(body);
+    }
+    if let Some(icon) = icon.as_deref() {
+        notification.icon(icon);
+    } else {
+        notification.auto_icon();
+    }
+    notification.timeout(notify_rust::Timeout::Never);
+
+    #[cfg(windows)]
+    {
+        let exe = tauri::utils::platform::current_exe().map_err(|e| e.to_string())?;
+        let exe_dir = exe
+            .parent()
+            .ok_or_else(|| "failed to get exe directory".to_string())?;
+        let curr_dir = exe_dir.display().to_string();
+        let sep = std::path::MAIN_SEPARATOR;
+        // AppUserModelID only when installed — matching tauri-plugin-notification.
+        if !(curr_dir.ends_with(&format!("{sep}target{sep}debug"))
+            || curr_dir.ends_with(&format!("{sep}target{sep}release")))
+        {
+            notification.app_id(&app.config().identifier);
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let identifier = app.config().identifier.clone();
+        let _ = notify_rust::set_application(if tauri::is_dev() {
+            "com.apple.Terminal"
+        } else {
+            &identifier
+        });
+    }
+
+    notification.show().map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Mirror the frontend's "keep running in the background" switch into the
+/// process-wide flag the window-close handler reads.
+#[cfg(desktop)]
+#[tauri::command]
+pub fn set_background_on_close(enabled: bool) {
+    crate::tray::set_background_on_close(enabled);
+}
+
+/// Push translated tray strings from the frontend. Best-effort: a missing
+/// tray (build failed, or not yet created) is a no-op.
+#[cfg(desktop)]
+#[tauri::command]
+pub fn set_tray_labels(app_handle: tauri::AppHandle, labels: crate::tray::TrayLabels) {
+    crate::tray::apply_labels(&app_handle, labels);
+}
+
+/// Whether the OS currently launches DashBeam at sign-in. The OS is the
+/// source of truth — a user who removed the login item outside the app must
+/// see the toggle turn itself off.
+/// `null` means the platform cannot be asked (Flatpak) — the caller keeps
+/// its cached value rather than prompting the user.
+#[cfg(desktop)]
+#[tauri::command]
+pub fn autostart_is_enabled(app_handle: tauri::AppHandle) -> Result<Option<bool>, String> {
+    crate::autostart::is_enabled(&app_handle)
+}
+
+/// Request an autostart change. Returns the state the OS ended up in, which may
+/// differ from `enabled` when the platform or the user refuses.
+///
+/// `async` on purpose: the Flatpak path blocks on a portal consent dialog, and
+/// Tauri runs synchronous commands on the main thread.
+#[cfg(desktop)]
+#[tauri::command]
+pub async fn autostart_set(app_handle: tauri::AppHandle, enabled: bool) -> Result<bool, String> {
+    crate::autostart::set(&app_handle, enabled).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1288,6 +1844,59 @@ mod tests {
             .expect("clock should be after unix epoch")
             .as_nanos();
         std::env::temp_dir().join(format!("{}-{}-{}.txt", name_prefix, std::process::id(), ts))
+    }
+
+    /// Locks the seam with the frontend's `useAppSettingStore`, which writes
+    /// this `settings.json` layout.
+    #[test]
+    fn parse_persisted_discoverability_reads_the_zustand_envelope() {
+        let envelope = serde_json::json!({ "state": { "discoverability": "off", "darkMode": true }, "version": 0 });
+        let file = serde_json::json!({ "app_settings": envelope.to_string() }).to_string();
+        assert_eq!(
+            parse_persisted_discoverability(&file),
+            Some(Discoverability::Off)
+        );
+
+        let envelope = serde_json::json!({ "state": { "discoverability": "paired-only" } });
+        let file = serde_json::json!({ "app_settings": envelope.to_string() }).to_string();
+        assert_eq!(
+            parse_persisted_discoverability(&file),
+            Some(Discoverability::PairedOnly)
+        );
+    }
+
+    #[test]
+    fn parse_persisted_discoverability_tolerates_missing_or_malformed_data() {
+        assert_eq!(parse_persisted_discoverability("not json"), None);
+        assert_eq!(parse_persisted_discoverability("{}"), None);
+        let file = serde_json::json!({ "app_settings": "{\"state\":{}}" }).to_string();
+        assert_eq!(parse_persisted_discoverability(&file), None);
+        let envelope = serde_json::json!({ "state": { "discoverability": "bogus" } });
+        let file = serde_json::json!({ "app_settings": envelope.to_string() }).to_string();
+        assert_eq!(parse_persisted_discoverability(&file), None);
+    }
+
+    #[test]
+    fn parse_persisted_minimize_to_tray_reads_the_zustand_envelope() {
+        let envelope = serde_json::json!({ "state": { "minimizeToTray": false, "darkMode": true }, "version": 0 });
+        let file = serde_json::json!({ "app_settings": envelope.to_string() }).to_string();
+        assert_eq!(parse_persisted_minimize_to_tray(&file), Some(false));
+
+        let envelope = serde_json::json!({ "state": { "minimizeToTray": true } });
+        let file = serde_json::json!({ "app_settings": envelope.to_string() }).to_string();
+        assert_eq!(parse_persisted_minimize_to_tray(&file), Some(true));
+    }
+
+    #[test]
+    fn parse_persisted_minimize_to_tray_tolerates_missing_or_malformed_data() {
+        assert_eq!(parse_persisted_minimize_to_tray("not json"), None);
+        assert_eq!(parse_persisted_minimize_to_tray("{}"), None);
+        let file = serde_json::json!({ "app_settings": "{\"state\":{}}" }).to_string();
+        assert_eq!(parse_persisted_minimize_to_tray(&file), None);
+        // Wrong type must not panic or coerce.
+        let envelope = serde_json::json!({ "state": { "minimizeToTray": "yes" } });
+        let file = serde_json::json!({ "app_settings": envelope.to_string() }).to_string();
+        assert_eq!(parse_persisted_minimize_to_tray(&file), None);
     }
 
     #[tokio::test]
@@ -1322,7 +1931,7 @@ mod tests {
         .await
         .expect("start_share should succeed");
 
-        let fetched = fetch_ticket_metadata(share.ticket.clone(), None)
+        let fetched = fetch_ticket_metadata(share.ticket.clone(), None, None)
             .await
             .expect("fetch_ticket_metadata command should succeed");
 
@@ -1334,4 +1943,115 @@ mod tests {
         drop(share);
         let _ = fs::remove_file(temp_path);
     }
+}
+
+// ---------------------------------------------------------------------------
+// Transfer history
+// ---------------------------------------------------------------------------
+
+/// Live report on a record's partial-receive store.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TransferTempData {
+    pub exists: bool,
+    pub size_bytes: u64,
+}
+
+#[tauri::command]
+pub async fn list_transfer_history(
+    history: State<'_, Arc<TransferHistoryStore>>,
+) -> Result<Vec<TransferRecord>, String> {
+    history.list().map_err(|e| e.to_string())
+}
+
+/// Removes one row and the partial store it pointed at — the row is the only
+/// pointer to that disk space, so dropping it alone strands the bytes.
+#[tauri::command]
+pub async fn delete_transfer_record(
+    id: String,
+    history: State<'_, Arc<TransferHistoryStore>>,
+) -> Result<(), String> {
+    let removed = history.delete(&id).map_err(|e| e.to_string())?;
+    if let Some(record) = removed {
+        engine::reclaim_partial(&record, &std::env::temp_dir());
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn clear_transfer_history(
+    history: State<'_, Arc<TransferHistoryStore>>,
+) -> Result<(), String> {
+    let removed = history.clear().map_err(|e| e.to_string())?;
+    let temp_dir = std::env::temp_dir();
+    for record in &removed {
+        engine::reclaim_partial(record, &temp_dir);
+    }
+    Ok(())
+}
+
+/// Stats the record's partial store rather than trusting the record: the
+/// directory can be removed by the OS, by a later receive, or by hand.
+#[tauri::command]
+pub async fn get_transfer_temp_data(
+    id: String,
+    history: State<'_, Arc<TransferHistoryStore>>,
+) -> Result<TransferTempData, String> {
+    let record = history
+        .list()
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .find(|r| r.id == id);
+
+    let Some(path) = record.and_then(|r| r.resumable_store_path) else {
+        return Ok(TransferTempData {
+            exists: false,
+            size_bytes: 0,
+        });
+    };
+
+    let path = PathBuf::from(path);
+    if !engine::is_reclaimable_partial(&path, &std::env::temp_dir()) {
+        return Ok(TransferTempData {
+            exists: false,
+            size_bytes: 0,
+        });
+    }
+
+    let size_bytes = tokio::task::spawn_blocking(move || get_total_size(&path).unwrap_or(0))
+        .await
+        .map_err(|e| format!("Task join error: {}", e))?;
+
+    Ok(TransferTempData {
+        exists: true,
+        size_bytes,
+    })
+}
+
+/// Frees a record's partial store without removing the row.
+#[tauri::command]
+pub async fn clear_transfer_temp_data(
+    id: String,
+    history: State<'_, Arc<TransferHistoryStore>>,
+    state: State<'_, AppStateMutex>,
+) -> Result<(), String> {
+    let record = history
+        .list()
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .find(|r| r.id == id)
+        .ok_or_else(|| "Transfer not found".to_string())?;
+
+    // Deleting the store a running download is writing into would corrupt it.
+    if let Some(active) = state.lock().await.current_receive_hash.as_deref() {
+        if record.blob_hash.as_deref() == Some(active) {
+            return Err("That transfer is downloading right now.".to_string());
+        }
+    }
+
+    engine::reclaim_partial(&record, &std::env::temp_dir());
+    history
+        .update(&id, |r| r.resumable_store_path = None)
+        .map_err(|e| e.to_string())?;
+    Ok(())
 }

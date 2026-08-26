@@ -44,6 +44,23 @@ export async function selectDownloadFolder(): Promise<DownloadFolderSelectionRes
 	)
 }
 
+/**
+ * Show a MediaStore-exported receive: a single file's `content://` URI opens it
+ * directly, `relativePath` opens the folder a multi-file export landed in. With
+ * no tree URI there's no SAF folder to open, so Downloads is the last resort.
+ */
+export async function openDownloadTarget(
+	uri: string,
+	relativePath = ''
+): Promise<void> {
+	if (!IS_TAURI) return
+
+	await invoke<void>('plugin:native-utils|open_download_target', {
+		uri,
+		relativePath,
+	})
+}
+
 /** Open the selected Android SAF download folder in a system file manager. */
 export async function openDownloadFolder(treeUri: string): Promise<void> {
 	if (!IS_TAURI) return

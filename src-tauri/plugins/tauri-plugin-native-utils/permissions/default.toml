@@ -8,5 +8,9 @@ permissions = [
     "allow-cancel-job",
     "allow-export-to-tree",
     "allow-open-download-folder",
-    "allow-get-window-insets"
+    "allow-export-to-media-store",
+    "allow-open-download-target",
+    "allow-get-window-insets",
+    "allow-start-presence-service",
+    "allow-stop-presence-service"
 ]

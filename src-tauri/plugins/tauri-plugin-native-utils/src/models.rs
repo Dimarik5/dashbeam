@@ -34,6 +34,21 @@ pub struct OpenDownloadFolderArgs {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ExportToMediaStoreArgs {
+    pub source_dir: String,
+}
+
+/// What to show for a MediaStore export, most specific first: a single file's
+/// `uri`, else the `relative_path` it landed in, else the Downloads list.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenDownloadTargetArgs {
+    pub uri: String,
+    pub relative_path: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ExportToTreeConflict {
     pub original: String,
     pub resolved: String,
@@ -54,4 +69,19 @@ pub struct WindowInsets {
 pub struct ExportToTreeResult {
     pub exported_count: u32,
     pub conflicts: Vec<ExportToTreeConflict>,
+}
+
+/// Returned by the Android side on pre-scoped-storage devices: keep the files
+/// in app-private staging rather than treat the export as a hard failure.
+pub const MEDIA_STORE_UNSUPPORTED: &str = "MEDIA_STORE_UNSUPPORTED";
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportToMediaStoreResult {
+    pub exported_count: u32,
+    pub conflicts: Vec<ExportToTreeConflict>,
+    /// One `content://` URI per exported file, in export order.
+    pub uris: Vec<String>,
+    /// Human-readable destination, e.g. `Download/DashBeam`.
+    pub display_path: String,
 }

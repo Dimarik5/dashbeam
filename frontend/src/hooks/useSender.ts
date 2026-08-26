@@ -1,31 +1,37 @@
-import { useEffect, useRef, useState, useCallback } from 'react'
-import { invoke, listen, type UnlistenFn } from '@/lib/platform-api'
-import {
-	getWebPreviewErrorMessage,
-	isWebPreviewError,
-} from '@/lib/web-preview-error'
-import { useTranslation } from '../i18n/react-i18next-compat'
-import type { AlertType } from '../types/ui'
-import type { TransferMetadata, TransferProgress } from '../types/transfer'
-import { SpeedAverager, calculateETA } from '../utils/etaUtils'
-import { getRelayConfigArg } from '../lib/relay'
-import { getDiscoveryConfigArg } from '../lib/discovery'
-import { useSenderStore } from '../store/sender-store'
-import { IS_PAIRING_CAPABLE } from '@/lib/platform'
-import {
-	invitePairedDevice,
-	isPairedDeviceActive,
-	listPairedDevices,
-	type PairedDevice,
-} from '@/lib/pairing-api'
-import { incrementPairedSendCount } from '@/lib/paired-send-counts'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useNodeCapability } from '@/hooks/useNodeCapability'
 import {
 	applyPresencePatch,
 	usePairedDeviceEvents,
 } from '@/hooks/usePairedDeviceEvents'
+import { incrementPairedSendCount } from '@/lib/paired-send-counts'
+import {
+	inviteNearbyDevice,
+	invitePairedDevice,
+	isPairedDeviceActive,
+	listPairedDevices,
+	type PairedDevice,
+} from '@/lib/pairing-api'
+import { IS_PAIRING_CAPABLE } from '@/lib/platform'
+import { invoke, listen, type UnlistenFn } from '@/lib/platform-api'
+import {
+	getWebPreviewErrorMessage,
+	isWebPreviewError,
+} from '@/lib/web-preview-error'
+import { useNearbyStore } from '@/store/nearby-store'
+import { useNearbyVerificationStore } from '@/store/nearby-verification-store'
 import { toastManager } from '../components/ui/toast'
+import { useTranslation } from '../i18n/react-i18next-compat'
+import { getDiscoveryConfigArg } from '../lib/discovery'
+import { getRelayConfigArg } from '../lib/relay'
 import { copyTextToClipboard } from '../lib/utils'
+import { useSenderStore } from '../store/sender-store'
+import type { TransferMetadata, TransferProgress } from '../types/transfer'
+import type { AlertType } from '../types/ui'
+import {
+	parseCompletionPayload,
+	parseProgressPayload,
+} from '../lib/transfer-events'
 
 export type PairedInviteStatus = 'sending' | 'sent' | 'failed'
 
@@ -54,6 +60,7 @@ export interface UseSenderReturn {
 	isNodeStatusPending?: boolean
 	pairedInviteStatus: Record<string, PairedInviteStatus>
 	onInvitePairedDevice: (endpointId: string) => Promise<boolean>
+	onInviteNearbyDevice: (endpointId: string) => Promise<boolean>
 
 	handleFileSelect: (
 		path: string,
@@ -168,14 +175,8 @@ export function useSender(): UseSenderReturn {
 	const wasManuallyStoppedRef = useRef(false)
 	const selectedPathRef = useRef<string | null>(null)
 	const pathTypeRef = useRef<'file' | 'directory' | null>(null)
-	const speedAveragerRef = useRef<SpeedAverager>(new SpeedAverager(10))
 
 	useEffect(() => {
-		// console.log('[useSender] selectedPath changed, updating ref:', {
-		// 	from: selectedPathRef.current,
-		// 	to: selectedPath,
-		// 	currentViewState: useSenderStore.getState().viewState,
-		// })
 		selectedPathRef.current = selectedPath
 	}, [selectedPath])
 
@@ -206,7 +207,6 @@ export function useSender(): UseSenderReturn {
 					try {
 						const count = parseInt(event.payload as string, 10)
 						if (!Number.isNaN(count)) {
-							// console.log('[useSender] active-connection-count event received:', count)
 							setActiveConnectionCount(count)
 						}
 					} catch (error) {
@@ -261,19 +261,12 @@ export function useSender(): UseSenderReturn {
 
 			const nextUnlistenStart = await listen('transfer-started', () => {
 				const storeState = useSenderStore.getState()
-				// console.log('[useSender] transfer-started event received:', {
-				// 	currentViewState: storeState.viewState,
-				// 	selectedPath: selectedPathRef.current,
-				// 	isBroadcastMode: storeState.isBroadcastMode,
-				// })
 
 				transferStartTimeRef.current = Date.now()
 				latestProgressRef.current = null
-				speedAveragerRef.current.reset()
 
 				// In broadcast mode, stay in SHARING state instead of transitioning to TRANSPORTING
 				if (storeState.isBroadcastMode) {
-					// console.log('[useSender] transfer-started: broadcast mode - staying in SHARING state')
 					setTransferProgress(null)
 					setTransferMetadata(null)
 					wasManuallyStoppedRef.current = false
@@ -288,7 +281,6 @@ export function useSender(): UseSenderReturn {
 						}
 					}, 50)
 				} else {
-					// console.log('[useSender] transfer-started: setting state to TRANSPORTING')
 					setViewState('TRANSPORTING')
 					setTransferProgress(null)
 					setTransferMetadata(null)
@@ -326,35 +318,11 @@ export function useSender(): UseSenderReturn {
 							return
 						}
 
-						const rawPayload = event.payload as string
-
-						const parts = rawPayload.split(':')
-
-						if (parts.length === 3) {
-							const bytesTransferred = parseInt(parts[0], 10)
-							const totalBytes = parseInt(parts[1], 10)
-							const speedInt = parseInt(parts[2], 10)
-							const speedBps = Number.isFinite(speedInt)
-								? Math.max(speedInt / 1000, 0)
-								: 0
-							const percentage =
-								totalBytes > 0
-									? Math.min((bytesTransferred / totalBytes) * 100, 100)
-									: 0
-
-							// Add speed sample and calculate ETA
-							speedAveragerRef.current.addSample(speedBps)
-							const avgSpeed = speedAveragerRef.current.getAverage()
-							const bytesRemaining = Math.max(totalBytes - bytesTransferred, 0)
-							const eta = calculateETA(bytesRemaining, avgSpeed)
-
-							latestProgressRef.current = {
-								bytesTransferred,
-								totalBytes,
-								speedBps,
-								percentage,
-								etaSeconds: eta ?? undefined,
-							}
+						// The engine already windows the speed and derives the ETA
+						// from it; averaging again here only adds lag.
+						const progress = parseProgressPayload(event.payload as string)
+						if (progress) {
+							latestProgressRef.current = progress
 						}
 					} catch (error) {
 						console.error('Failed to parse progress event:', error)
@@ -369,31 +337,21 @@ export function useSender(): UseSenderReturn {
 
 			const nextUnlistenComplete = await listen(
 				'transfer-completed',
-				async () => {
+				async (event: any) => {
 					const storeState = useSenderStore.getState()
-					// console.log('[useSender] transfer-completed event received:', {
-					// 	wasManuallyStopped: wasManuallyStoppedRef.current,
-					// 	currentViewState: storeState.viewState,
-					// 	selectedPath: selectedPathRef.current,
-					// 	storeSelectedPath: storeState.selectedPath,
-					// 	hasLatestProgress: !!latestProgressRef.current,
-					// })
 
 					// Guard: Skip if manually stopped
 					if (wasManuallyStoppedRef.current) {
-						// console.log('[useSender] transfer-completed: skipping (was manually stopped)')
 						return
 					}
 
 					// Guard: Skip if already reset to IDLE (delayed event after reset)
 					if (storeState.viewState === 'IDLE') {
-						// console.log('[useSender] transfer-completed: skipping (already in IDLE state - likely delayed event after reset)')
 						return
 					}
 
 					// Guard: Skip if selectedPath is null in store (already reset)
 					if (!storeState.selectedPath) {
-						// console.log('[useSender] transfer-completed: skipping (selectedPath is null in store - already reset)')
 						return
 					}
 
@@ -418,24 +376,18 @@ export function useSender(): UseSenderReturn {
 					await new Promise((resolve) => setTimeout(resolve, 10))
 
 					const endTime = Date.now()
-					const duration = transferStartTimeRef.current
-						? endTime - transferStartTimeRef.current
-						: 0
+					// Prefer the engine's wire time: the wall clock here also
+					// covers connection setup and the completion debounce.
+					const completion = parseCompletionPayload(event?.payload)
+					const duration =
+						completion?.durationMs ??
+						(transferStartTimeRef.current
+							? endTime - transferStartTimeRef.current
+							: 0)
 
 					const currentPath = selectedPathRef.current
 					const currentPathType = pathTypeRef.current
 					const currentBroadcastMode = storeState.isBroadcastMode
-
-					// console.log('[useSender] transfer-completed: processing:', {
-					// 	currentPath,
-					// 	currentPathType,
-					// 	currentBroadcastMode,
-					// 	duration,
-					// 	storeSelectedPath: storeState.selectedPath,
-					// 	storeViewState: storeState.viewState,
-					// 	storeHasMetadata: !!storeState.transferMetadata,
-					// 	refVsStoreMatch: currentPath === storeState.selectedPath,
-					// })
 
 					// Use store's selectedPath as source of truth (not the ref)
 					const pathToUse = storeState.selectedPath || currentPath
@@ -445,11 +397,6 @@ export function useSender(): UseSenderReturn {
 						const pathTypeToUse = storeState.pathType || currentPathType
 						const itemCount = storeState.selectedPaths.length
 						const shouldResolveExactSize = itemCount <= 1
-
-						// console.log('[useSender] transfer-completed: setting initial metadata:', {
-						// 	fileName,
-						// 	estimatedFileSize,
-						// })
 
 						setTransferMetadata({
 							fileName,
@@ -463,17 +410,14 @@ export function useSender(): UseSenderReturn {
 
 						// Check if broadcast mode is enabled
 						if (currentBroadcastMode) {
-							// console.log('[useSender] transfer-completed: broadcast mode - will reset after delay')
 							// In broadcast mode: reset to listening state after a brief delay
 							// Note: active connection count is now managed by active-connection-count event
 							setTimeout(() => {
-								// console.log('[useSender] transfer-completed: broadcast mode timeout - resetting')
 								resetForBroadcast()
 								latestProgressRef.current = null
 								transferStartTimeRef.current = null
 							}, 2000)
 						} else {
-							// console.log('[useSender] transfer-completed: normal mode - setting SUCCESS state')
 							// Normal mode: show success screen
 							setViewState('SUCCESS')
 							setTransferProgress(null)
@@ -484,10 +428,6 @@ export function useSender(): UseSenderReturn {
 								const fileSize = await invoke<number>('get_file_size', {
 									path: pathToUse,
 								})
-								// console.log('[useSender] transfer-completed: got file size, updating metadata:', {
-								// 	fileSize,
-								// 	currentViewState: useSenderStore.getState().viewState,
-								// })
 								setTransferMetadata({
 									fileName,
 									fileSize,
@@ -530,29 +470,19 @@ export function useSender(): UseSenderReturn {
 
 			const nextUnlistenFailed = await listen('transfer-failed', async () => {
 				const storeState = useSenderStore.getState()
-				// console.log('[useSender] transfer-failed event received:', {
-				// 	wasManuallyStopped: wasManuallyStoppedRef.current,
-				// 	currentViewState: storeState.viewState,
-				// 	selectedPath: selectedPathRef.current,
-				// 	storeSelectedPath: storeState.selectedPath,
-				// 	isBroadcastMode: storeState.isBroadcastMode,
-				// })
 
 				// Guard: Skip if manually stopped
 				if (wasManuallyStoppedRef.current) {
-					// console.log('[useSender] transfer-failed: skipping (was manually stopped)')
 					return
 				}
 
 				// Guard: Skip if already reset to IDLE (delayed event after reset)
 				if (storeState.viewState === 'IDLE') {
-					// console.log('[useSender] transfer-failed: skipping (already in IDLE state - likely delayed event after reset)')
 					return
 				}
 
 				// Guard: Skip if selectedPath is null in store (already reset)
 				if (!storeState.selectedPath) {
-					// console.log('[useSender] transfer-failed: skipping (selectedPath is null in store - already reset)')
 					return
 				}
 
@@ -576,19 +506,12 @@ export function useSender(): UseSenderReturn {
 
 				// In broadcast mode, reset to SHARING instead of showing SUCCESS
 				if (storeState.isBroadcastMode) {
-					// console.log('[useSender] transfer-failed: broadcast mode - resetting to SHARING')
 					// Note: active connection count is now managed by active-connection-count event
 					resetForBroadcast()
 					latestProgressRef.current = null
 					transferStartTimeRef.current = null
 					return
 				}
-
-				// console.log('[useSender] transfer-failed: setting SUCCESS state:', {
-				// 	currentPath,
-				// 	pathToUse,
-				// 	pathTypeToUse,
-				// })
 
 				const endTime = Date.now()
 				const duration = transferStartTimeRef.current
@@ -598,10 +521,6 @@ export function useSender(): UseSenderReturn {
 				if (pathToUse) {
 					const fileName = pathToUse.split('/').pop() || 'Unknown'
 					const itemCount = storeState.selectedPaths.length
-					// console.log('[useSender] transfer-failed: setting metadata:', {
-					// 	fileName,
-					// 	wasStopped: true,
-					// })
 					setTransferMetadata({
 						fileName,
 						fileSize: 0,
@@ -734,12 +653,6 @@ export function useSender(): UseSenderReturn {
 	}
 
 	const startSharing = async () => {
-		// console.log('[useSender] startSharing called:', {
-		// 	selectedPath,
-		// 	currentViewState: viewState,
-		// 	hasTransferMetadata: !!transferMetadata,
-		// })
-
 		if (!selectedPaths.length) {
 			console.warn(
 				'[useSender] startSharing: no selectedPaths, returning early'
@@ -748,7 +661,6 @@ export function useSender(): UseSenderReturn {
 		}
 
 		try {
-			// console.log('[useSender] startSharing: resetting state to IDLE')
 			setViewState('IDLE')
 			setTransferMetadata(null)
 			setTransferProgress(null)
@@ -756,7 +668,6 @@ export function useSender(): UseSenderReturn {
 			transferStartTimeRef.current = null
 			wasManuallyStoppedRef.current = false
 			latestProgressRef.current = null
-			speedAveragerRef.current.reset()
 
 			setIsLoading(true)
 			const result = await invoke<string>('send_items', {
@@ -764,7 +675,6 @@ export function useSender(): UseSenderReturn {
 				relay: getRelayConfigArg(),
 				discovery: getDiscoveryConfigArg(),
 			})
-			// console.log('[useSender] startSharing: got ticket, setting state to SHARING')
 			setTicket(result)
 			setViewState('SHARING')
 		} catch (error) {
@@ -785,14 +695,6 @@ export function useSender(): UseSenderReturn {
 	}
 
 	const stopSharing = async () => {
-		// console.log('[useSender] stopSharing called:', {
-		// 	currentViewState: viewState,
-		// 	hasTransferMetadata: !!transferMetadata,
-		// 	transferMetadataWasStopped: transferMetadata?.wasStopped,
-		// 	selectedPath: selectedPathRef.current,
-		// 	storeSelectedPath: selectedPath,
-		// })
-
 		// Always disable broadcast mode when stopping
 		setIsBroadcastMode(false)
 
@@ -801,13 +703,6 @@ export function useSender(): UseSenderReturn {
 				viewState === 'TRANSPORTING' && !transferMetadata?.wasStopped
 			const isCompletedTransfer = viewState === 'SUCCESS' && transferMetadata
 
-			// console.log('[useSender] stopSharing: conditions:', {
-			// 	wasActiveTransfer,
-			// 	isCompletedTransfer,
-			// 	viewState,
-			// 	hasTransferMetadata: !!transferMetadata,
-			// })
-
 			const currentSelectedPath = selectedPathRef.current
 			const currentTransferStartTime = transferStartTimeRef.current
 			const storeState = useSenderStore.getState()
@@ -815,7 +710,6 @@ export function useSender(): UseSenderReturn {
 			if (wasActiveTransfer && currentSelectedPath) {
 				// In broadcast mode, reset to SHARING instead of showing SUCCESS
 				if (storeState.isBroadcastMode) {
-					// console.log('[useSender] stopSharing: active transfer in broadcast mode - resetting to SHARING')
 					wasManuallyStoppedRef.current = true
 
 					if (progressUpdateIntervalRef.current) {
@@ -826,9 +720,7 @@ export function useSender(): UseSenderReturn {
 					resetForBroadcast()
 					latestProgressRef.current = null
 					transferStartTimeRef.current = null
-					speedAveragerRef.current.reset()
 				} else {
-					// console.log('[useSender] stopSharing: active transfer detected - setting SUCCESS with stopped metadata')
 					wasManuallyStoppedRef.current = true
 
 					if (progressUpdateIntervalRef.current) {
@@ -856,17 +748,14 @@ export function useSender(): UseSenderReturn {
 					setViewState('SUCCESS')
 					latestProgressRef.current = null
 					transferStartTimeRef.current = null
-					speedAveragerRef.current.reset()
 				}
 			}
 
 			if (isCompletedTransfer) {
-				// console.log('[useSender] stopSharing: completed transfer - resetting to idle')
 				wasManuallyStoppedRef.current = false
 				resetToIdle()
 				transferStartTimeRef.current = null
 				latestProgressRef.current = null
-				speedAveragerRef.current.reset()
 
 				invoke('stop_sharing').catch((error) => {
 					console.warn('Background cleanup failed (non-critical):', error)
@@ -878,24 +767,20 @@ export function useSender(): UseSenderReturn {
 
 			// If no active transfer (just sharing, waiting for acceptance), reset to idle
 			if (!wasActiveTransfer || !currentSelectedPath) {
-				// console.log('[useSender] stopSharing: no active transfer - resetting to idle')
 				wasManuallyStoppedRef.current = false
 				setActiveConnectionCount(0)
 				resetToIdle()
 				transferStartTimeRef.current = null
 				latestProgressRef.current = null
-				speedAveragerRef.current.reset()
 				return
 			}
 
-			// console.log('[useSender] stopSharing: clearing transfer state')
 			setTicket(null)
 			setSelectedPaths([])
 			setPathType(null)
 			setTransferProgress(null)
 			transferStartTimeRef.current = null
 			latestProgressRef.current = null
-			speedAveragerRef.current.reset()
 		} catch (error) {
 			console.error('Failed to stop sharing:', error)
 			showAlert(
@@ -907,7 +792,6 @@ export function useSender(): UseSenderReturn {
 	}
 
 	const resetForNewTransfer = async () => {
-		// console.log('[useSender] resetForNewTransfer called')
 		await stopSharing()
 	}
 
@@ -995,6 +879,81 @@ export function useSender(): UseSenderReturn {
 		}
 	}
 
+	const onInviteNearbyDevice = async (endpointId: string): Promise<boolean> => {
+		if (!ticket) {
+			return false
+		}
+		if (!isNodeReady) {
+			toastManager.add({
+				title: t('common:settings.devices.nodeUnavailableTitle'),
+				description: t('common:settings.devices.nodeUnavailableHint'),
+				type: 'error',
+			})
+			return false
+		}
+		if (pairedInviteStatus[endpointId] === 'sending') return false
+		const anotherInviteInFlight = Object.entries(pairedInviteStatus).some(
+			([id, status]) =>
+				id !== endpointId && (status === 'sending' || status === 'sent')
+		)
+		if (anotherInviteInFlight || pairedInviteStatus[endpointId] === 'sent') {
+			return false
+		}
+
+		const nearbyDevices = useNearbyStore.getState().devices
+		const nearby = nearbyDevices.find((d) => d.endpointId === endpointId)
+		const nearbyName =
+			nearby?.displayName ??
+			(endpointId
+				? `${endpointId.slice(0, 8)}…`
+				: t('common:sender.pairedDevices.unknownPeer'))
+		const fileCount = Math.max(selectedPaths.length, 1)
+		setInviteStatus(endpointId, 'sending')
+		try {
+			const totalSize = await resolveShareTotalSize()
+			const delivered = await inviteNearbyDevice(
+				endpointId,
+				ticket,
+				fileCount,
+				totalSize
+			)
+			if (delivered) {
+				setInviteStatus(endpointId, 'sent')
+				toastManager.add({
+					title: t('common:sender.pairedDevices.inviteSentTo', {
+						name: nearbyName,
+					}),
+					description: t('common:sender.pairedDevices.inviteSentDesc'),
+					type: 'success',
+				})
+				// The receiver is being asked to check this code against our
+				// screen. Only on confirmed delivery — a code for an invite that
+				// never arrived is worse than none.
+				useNearbyVerificationStore
+					.getState()
+					.show({ endpointId, name: nearbyName })
+				return true
+			}
+			setInviteStatus(endpointId, 'failed')
+			toastManager.add({
+				title: t('common:sender.pairedDevices.inviteFailed'),
+				description: t('common:settings.devices.nearby.inviteFailed'),
+				type: 'error',
+			})
+			setTimeout(() => setInviteStatus(endpointId, null), 4000)
+			return false
+		} catch (error) {
+			setInviteStatus(endpointId, 'failed')
+			toastManager.add({
+				title: t('common:sender.pairedDevices.inviteFailed'),
+				description: String(error),
+				type: 'error',
+			})
+			setTimeout(() => setInviteStatus(endpointId, null), 4000)
+			return false
+		}
+	}
+
 	const copyTicket = async () => {
 		if (ticket) {
 			try {
@@ -1038,6 +997,7 @@ export function useSender(): UseSenderReturn {
 		isNodeStatusPending,
 		pairedInviteStatus,
 		onInvitePairedDevice,
+		onInviteNearbyDevice,
 
 		handleFileSelect,
 		handleFilesSelect,

@@ -1,6 +1,7 @@
 package com.dashbeam.plugin.native_utils
 
 import android.app.Activity
+import android.app.DownloadManager
 import android.content.ContentResolver
 import android.content.Intent
 import android.net.Uri
@@ -52,6 +53,22 @@ class OpenDownloadFolderArgs {
     var treeUri: String = ""
 }
 
+@InvokeArg
+class ExportToMediaStoreArgs {
+    var sourceDir: String = ""
+}
+
+@InvokeArg
+class OpenDownloadTargetArgs {
+    var uri: String = ""
+
+    /**
+     * Destination relative to external storage, e.g. `Download/DashBeam`, for
+     * when there's no single file to show. Empty falls back to Downloads.
+     */
+    var relativePath: String = ""
+}
+
 @Keep
 data class DownloadFolderSelectionResponse(
     val uri: String,
@@ -68,6 +85,13 @@ class NativeUtils(private val activity: Activity) : Plugin(activity) {
         private const val RW_PERMISSION_FLAGS =
             Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_READ_URI_PERMISSION
         private const val SHARE_RECEIVED_EVENT = "shareReceived"
+
+        /** Sentinel the Rust side matches to fall back to app-private staging. */
+        const val MEDIA_STORE_UNSUPPORTED = "MEDIA_STORE_UNSUPPORTED"
+
+        /** Documents provider backing the primary shared-storage volume. */
+        private const val EXTERNAL_STORAGE_AUTHORITY =
+            "com.android.externalstorage.documents"
     }
 
     @Command
@@ -137,6 +161,22 @@ class NativeUtils(private val activity: Activity) : Plugin(activity) {
         }
     }
 
+    /**
+     * Presence lifetime is decided in Rust, which knows the paired-device count
+     * and the discoverability setting; these two just relay the decision.
+     */
+    @Command
+    fun start_presence_service(invoke: Invoke) {
+        PresenceService.start(activity.applicationContext)
+        invoke.resolve()
+    }
+
+    @Command
+    fun stop_presence_service(invoke: Invoke) {
+        PresenceService.stop(activity.applicationContext)
+        invoke.resolve()
+    }
+
     @Command
     fun get_window_insets(invoke: Invoke) {
         activity.runOnUiThread {
@@ -179,6 +219,99 @@ class NativeUtils(private val activity: Activity) : Plugin(activity) {
         } catch (e: Exception) {
             invoke.reject(e.message ?: "Failed to open download folder")
         }
+    }
+
+    @Command
+    fun export_to_media_store(invoke: Invoke) {
+        val args = invoke.parseArgs(ExportToMediaStoreArgs::class.java)
+        scope.launch {
+            try {
+                val result = exportDirectoryToMediaStore(activity, File(args.sourceDir))
+                invoke.resolveObject(result)
+            } catch (_: MediaStoreUnsupportedException) {
+                invoke.reject(MEDIA_STORE_UNSUPPORTED)
+            } catch (e: Exception) {
+                invoke.reject(e.message ?: "Failed to export to the Downloads folder")
+            }
+        }
+    }
+
+    /**
+     * Show a received file, the folder it landed in, or the system Downloads
+     * list. There's no tree URI for the SAF path and `ACTION_VIEW_DOWNLOADS`
+     * only ever opens the Downloads root, so a document URI built from
+     * `relativePath` is tried first — OEM file managers vary, hence the chain.
+     */
+    @Command
+    fun open_download_target(invoke: Invoke) {
+        val args = invoke.parseArgs(OpenDownloadTargetArgs::class.java)
+        val uriString = args.uri.trim()
+        val relativePath = args.relativePath.trim().trim('/')
+
+        try {
+            val candidates = mutableListOf<Intent>()
+
+            if (uriString.isNotEmpty()) {
+                val uri = Uri.parse(uriString)
+                val mime = activity.contentResolver.getType(uri) ?: "*/*"
+                candidates += Intent(Intent.ACTION_VIEW).apply {
+                    setDataAndType(uri, mime)
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                }
+            }
+
+            candidates += folderIntents(relativePath)
+            candidates += Intent(DownloadManager.ACTION_VIEW_DOWNLOADS)
+
+            if (!startFirstResolvable(candidates)) {
+                invoke.reject("No app available to open the downloaded files")
+                return
+            }
+            invoke.resolve()
+        } catch (e: Exception) {
+            invoke.reject(e.message ?: "Failed to open the downloaded file")
+        }
+    }
+
+    /**
+     * `ACTION_VIEW` intents pointing at a storage folder, most specific first.
+     * Two document-URI shapes, because file managers disagree on which they
+     * accept — a bare document URI or one built against a tree.
+     */
+    private fun folderIntents(relativePath: String): List<Intent> {
+        if (relativePath.isEmpty()) return emptyList()
+
+        val documentId = "primary:$relativePath"
+        val authority = EXTERNAL_STORAGE_AUTHORITY
+        val treeUri = DocumentsContract.buildTreeDocumentUri(authority, documentId)
+
+        return listOf(
+            DocumentsContract.buildDocumentUriUsingTree(treeUri, documentId),
+            DocumentsContract.buildDocumentUri(authority, documentId),
+        ).map { uri ->
+            Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(uri, DocumentsContract.Document.MIME_TYPE_DIR)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+        }
+    }
+
+    /**
+     * Fire the first intent something can handle, reporting whether any did.
+     * `resolveActivity` is unreliable under API 30 package visibility, so each
+     * is simply attempted in turn.
+     */
+    private fun startFirstResolvable(intents: List<Intent>): Boolean {
+        for (intent in intents) {
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            try {
+                activity.startActivity(intent)
+                return true
+            } catch (_: android.content.ActivityNotFoundException) {
+                // Try the next, less specific, target.
+            }
+        }
+        return false
     }
 
     @ActivityCallback
