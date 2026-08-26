@@ -788,7 +788,7 @@ export function useReceiver(): UseReceiverReturn {
 		try {
 			folderOpenTriggeredRef.current = true
 
-			if (IS_ANDROID) {
+			if (IS_ANDROID || IS_IOS) {
 				const treeUri = androidOpenUriRef.current.trim()
 				if (treeUri) {
 					await openDownloadFolder(treeUri)
