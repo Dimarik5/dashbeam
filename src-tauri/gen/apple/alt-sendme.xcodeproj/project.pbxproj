@@ -13,6 +13,7 @@
 		5DE68CC2FFEEA56DB59913CD /* assets in Resources */ = {isa = PBXBuildFile; fileRef = 1A66D5BD6FB014340423B30A /* assets */; };
 		684FA87468E4782530AFB3BA /* UIKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 841C0E73D7A8F5B8F6591478 /* UIKit.framework */; };
 		8C8974EB936D3E9DE32917D0 /* WebKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 6BF8D3959D4A35771964702F /* WebKit.framework */; };
+		C431E78DDA16405DD2FCCB8F /* main.mm in Sources */ = {isa = PBXBuildFile; fileRef = 892214CB0F3134C98F2EAD1D /* main.mm */; };
 		C730523C8F55FBD465F22408 /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = EE50E0E116763BE0553CA993 /* LaunchScreen.storyboard */; };
 		CB3323C1EB75234039132885 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 82244DC0E0C585CEF0F177EF /* Assets.xcassets */; };
 		CD2B4D6BFF33ABD2ABF32B80 /* Metal.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 6290C2D3DF8EA1E9C5093962 /* Metal.framework */; };
@@ -23,6 +24,7 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		0BFC100E91EDB6BAB110DCC7 /* presence_service.rs */ = {isa = PBXFileReference; path = presence_service.rs; sourceTree = "<group>"; };
 		0BFD8796036377FF53B11ABE /* mod.rs */ = {isa = PBXFileReference; path = mod.rs; sourceTree = "<group>"; };
 		0C1EC30935E3D41060908D9B /* MetalKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = MetalKit.framework; path = System/Library/Frameworks/MetalKit.framework; sourceTree = SDKROOT; };
 		15B4E1906273B8E3E72A2C78 /* SystemConfiguration.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SystemConfiguration.framework; path = System/Library/Frameworks/SystemConfiguration.framework; sourceTree = SDKROOT; };
@@ -31,6 +33,7 @@
 		1A66D5BD6FB014340423B30A /* assets */ = {isa = PBXFileReference; lastKnownFileType = folder; path = assets; sourceTree = SOURCE_ROOT; };
 		1B283470D2F04DC85541F4D5 /* base64.rs */ = {isa = PBXFileReference; path = base64.rs; sourceTree = "<group>"; };
 		2491CAC9C0847ED500CDB798 /* state.rs */ = {isa = PBXFileReference; path = state.rs; sourceTree = "<group>"; };
+		2FEF2ABAE3B73FE4A3FE5EAA /* history.rs */ = {isa = PBXFileReference; path = history.rs; sourceTree = "<group>"; };
 		3108006A56599D869D7D4548 /* alt-sendme_iOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = "alt-sendme_iOS.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		366702F0ED9B47CF10DE4294 /* bindings.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = bindings.h; sourceTree = "<group>"; };
 		36C596A8440338653BC507A9 /* alt-sendme_iOS.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = "alt-sendme_iOS.entitlements"; sourceTree = "<group>"; };
@@ -47,12 +50,15 @@
 		7F03A590587DBAAC91D202F3 /* macos.rs */ = {isa = PBXFileReference; path = macos.rs; sourceTree = "<group>"; };
 		82244DC0E0C585CEF0F177EF /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		841C0E73D7A8F5B8F6591478 /* UIKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UIKit.framework; path = System/Library/Frameworks/UIKit.framework; sourceTree = SDKROOT; };
+		892214CB0F3134C98F2EAD1D /* main.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = main.mm; sourceTree = "<group>"; };
 		92F037A526A9504C63B0450E /* main.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = main.mm; sourceTree = "<group>"; };
 		97CFF811BB46C4B8CF351BCA /* version.rs */ = {isa = PBXFileReference; path = version.rs; sourceTree = "<group>"; };
+		98131EB0CC33541C773DDED4 /* autostart_portal.rs */ = {isa = PBXFileReference; path = autostart_portal.rs; sourceTree = "<group>"; };
 		9B6DC5C45C15D8503C8F1E63 /* window.rs */ = {isa = PBXFileReference; path = window.rs; sourceTree = "<group>"; };
 		9FAAC80B8C93C879EFA656DE /* mod.rs */ = {isa = PBXFileReference; path = mod.rs; sourceTree = "<group>"; };
 		B2B40AE1A17465CBC576B7CB /* linux.rs */ = {isa = PBXFileReference; path = linux.rs; sourceTree = "<group>"; };
 		C6E1009FD6FCB1CF0EDA92E6 /* main.rs */ = {isa = PBXFileReference; path = main.rs; sourceTree = "<group>"; };
+		C934F83E2F7753AC962A4FA3 /* autostart.rs */ = {isa = PBXFileReference; path = autostart.rs; sourceTree = "<group>"; };
 		DA7ED5DBB4828A0F77E0EA93 /* portable.rs */ = {isa = PBXFileReference; path = portable.rs; sourceTree = "<group>"; };
 		DAA7E0296A7349950432F3C6 /* libapp.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; path = libapp.a; sourceTree = "<group>"; };
 		DD4EB5D1F26161CBE16A5A4E /* Security.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Security.framework; path = System/Library/Frameworks/Security.framework; sourceTree = SDKROOT; };
@@ -60,6 +66,7 @@
 		E80CF2D01E3B547021033F11 /* mod.rs */ = {isa = PBXFileReference; path = mod.rs; sourceTree = "<group>"; };
 		EE50E0E116763BE0553CA993 /* LaunchScreen.storyboard */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; path = LaunchScreen.storyboard; sourceTree = "<group>"; };
 		F7CC1E6B2618133C848D3BFA /* windows.rs */ = {isa = PBXFileReference; path = windows.rs; sourceTree = "<group>"; };
+		F84A63DC9A37CD62F1D7C15F /* bindings.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = bindings.h; sourceTree = "<group>"; };
 		F89A8B8A4AC5C519FE2030C1 /* commands.rs */ = {isa = PBXFileReference; path = commands.rs; sourceTree = "<group>"; };
 		FA77A8A4E865C24281691910 /* video.rs */ = {isa = PBXFileReference; path = video.rs; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -108,6 +115,7 @@
 			isa = PBXGroup;
 			children = (
 				730FEC6E7740D6BD22219F2D /* alt-sendme */,
+				A66990AECC32BA0096479B25 /* dashbeam */,
 			);
 			path = Sources;
 			sourceTree = "<group>";
@@ -207,6 +215,15 @@
 			name = Products;
 			sourceTree = "<group>";
 		};
+		A66990AECC32BA0096479B25 /* dashbeam */ = {
+			isa = PBXGroup;
+			children = (
+				892214CB0F3134C98F2EAD1D /* main.mm */,
+				DE25634C4490B57981FA265D /* bindings */,
+			);
+			path = dashbeam;
+			sourceTree = "<group>";
+		};
 		B4F7C8479CF3CB5E5D190AA6 /* utils */ = {
 			isa = PBXGroup;
 			children = (
@@ -224,13 +241,25 @@
 			path = "alt-sendme_iOS";
 			sourceTree = "<group>";
 		};
+		DE25634C4490B57981FA265D /* bindings */ = {
+			isa = PBXGroup;
+			children = (
+				F84A63DC9A37CD62F1D7C15F /* bindings.h */,
+			);
+			path = bindings;
+			sourceTree = "<group>";
+		};
 		EA02233885EC280D7452440A /* src */ = {
 			isa = PBXGroup;
 			children = (
+				98131EB0CC33541C773DDED4 /* autostart_portal.rs */,
+				C934F83E2F7753AC962A4FA3 /* autostart.rs */,
 				F89A8B8A4AC5C519FE2030C1 /* commands.rs */,
+				2FEF2ABAE3B73FE4A3FE5EAA /* history.rs */,
 				E29A9C0DDD3918DDCA53CD85 /* lib.rs */,
 				678310FF9251FF95C83ACF59 /* logging.rs */,
 				C6E1009FD6FCB1CF0EDA92E6 /* main.rs */,
+				0BFC100E91EDB6BAB110DCC7 /* presence_service.rs */,
 				2491CAC9C0847ED500CDB798 /* state.rs */,
 				543369A01B2AB5CD22977F14 /* tray.rs */,
 				97CFF811BB46C4B8CF351BCA /* version.rs */,
@@ -337,6 +366,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				C431E78DDA16405DD2FCCB8F /* main.mm in Sources */,
 				2114B4914B415AB059D90862 /* main.mm in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
