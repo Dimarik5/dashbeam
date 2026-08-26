@@ -28,6 +28,9 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Prepare
+        run: rm -rf src-tauri/gen/apple
+
       - name: Initialize iOS
         run: pnpm tauri ios init
 
