@@ -49,7 +49,7 @@ jobs:
           from pathlib import Path
 
           project = Path(
-              "src-tauri/gen/apple/alt-sendme.xcodeproj/project.pbxproj"
+              "src-tauri/gen/apple/dashbeam.xcodeproj/project.pbxproj"
           )
 
           text = project.read_text()
@@ -76,21 +76,18 @@ jobs:
           from pathlib import Path
           import re
 
-          pbx_path = Path("src-tauri/gen/apple/alt-sendme.xcodeproj/project.pbxproj")
+          pbx_path = Path("src-tauri/gen/apple/dashbeam.xcodeproj/project.pbxproj")
           if pbx_path.exists():
               content = pbx_path.read_text()
               
-              # 1. Повышаем минимальную версию iOS до 16.0
               content = re.sub(r"IPHONEOS_DEPLOYMENT_TARGET = [0-9.]+;", "IPHONEOS_DEPLOYMENT_TARGET = 16.0;", content)
 
-              # 2. Очищаем прошлые некорректные флаги и пути
               content = re.sub(r"\t\t\t\tOTHER_LDFLAGS = [^\n]*;\n", "", content)
               content = re.sub(r"\t\t\t\tLIBRARY_SEARCH_PATHS = \([^)]*\);\n", "", content)
               content = re.sub(r"\t\t\t\tLD_RUNPATH_SEARCH_PATHS = \([^)]*\);\n", "", content)
               content = re.sub(r"\t\t\t\tSWIFT_VERSION = [^\n]*;\n", "", content)
               content = re.sub(r"\t\t\t\tALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES = [^\n]*;\n", "", content)
 
-              # 3. Вставляем правильную конфигурацию Swift Rpath и Search Paths
               search_setting = (
                   "\t\t\t\tSWIFT_VERSION = 5.0;\n"
                   "\t\t\t\tALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES = YES;\n"
