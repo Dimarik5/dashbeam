@@ -28,6 +28,6 @@ fn main() {
         println!("cargo:rustc-env=APP_VERSION={}", env!("CARGO_PKG_VERSION"));
         eprintln!("Warning: package.json not found, using Cargo.toml version");
     }
-    
+
     tauri_build::build()
 }
