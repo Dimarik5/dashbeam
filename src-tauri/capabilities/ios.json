@@ -5,18 +5,18 @@
 	"platforms": ["iOS"],
 	"windows": ["main"],
 	"permissions": [
-        "core:default",
-        "core:webview:allow-set-webview-zoom",
-        "core:window:allow-start-dragging",
-        "core:window:allow-set-theme",
-        "core:window:allow-set-focus",
-        "os:default",
-        "opener:default",
-        "dialog:default",
-        "dialog:allow-open",
-        "dialog:allow-save",
-        "store:default",
-        "native-utils:default",
-        "deep-link:default"
+	"core:default",
+	"core:webview:allow-set-webview-zoom",
+	"core:window:allow-start-dragging",
+	"core:window:allow-set-theme",
+	"core:window:allow-set-focus",
+	"os:default",
+	"opener:default",
+	"dialog:default",
+	"dialog:allow-open",
+	"dialog:allow-save",
+	"store:default",
+	"native-utils:default",
+	"deep-link:default"
 	]
 }
