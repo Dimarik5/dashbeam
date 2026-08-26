@@ -15,10 +15,10 @@
             buildForAnalyzing = "YES">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "78CDA91347B0A2E5080310B3"
-               BuildableName = "alt-sendme_iOS.app"
-               BlueprintName = "alt-sendme_iOS"
-               ReferencedContainer = "container:alt-sendme.xcodeproj">
+               BlueprintIdentifier = "57F269A18E7F60668E7B97AF"
+               BuildableName = "dashbeam_iOS.app"
+               BlueprintName = "dashbeam_iOS"
+               ReferencedContainer = "container:dashbeam.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
       </BuildActionEntries>
@@ -32,10 +32,10 @@
       <MacroExpansion>
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "78CDA91347B0A2E5080310B3"
-            BuildableName = "alt-sendme_iOS.app"
-            BlueprintName = "alt-sendme_iOS"
-            ReferencedContainer = "container:alt-sendme.xcodeproj">
+            BlueprintIdentifier = "57F269A18E7F60668E7B97AF"
+            BuildableName = "dashbeam_iOS.app"
+            BlueprintName = "dashbeam_iOS"
+            ReferencedContainer = "container:dashbeam.xcodeproj">
          </BuildableReference>
       </MacroExpansion>
       <Testables>
@@ -69,10 +69,10 @@
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "78CDA91347B0A2E5080310B3"
-            BuildableName = "alt-sendme_iOS.app"
-            BlueprintName = "alt-sendme_iOS"
-            ReferencedContainer = "container:alt-sendme.xcodeproj">
+            BlueprintIdentifier = "57F269A18E7F60668E7B97AF"
+            BuildableName = "dashbeam_iOS.app"
+            BlueprintName = "dashbeam_iOS"
+            ReferencedContainer = "container:dashbeam.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
       <CommandLineArguments>
@@ -100,10 +100,10 @@
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "78CDA91347B0A2E5080310B3"
-            BuildableName = "alt-sendme_iOS.app"
-            BlueprintName = "alt-sendme_iOS"
-            ReferencedContainer = "container:alt-sendme.xcodeproj">
+            BlueprintIdentifier = "57F269A18E7F60668E7B97AF"
+            BuildableName = "dashbeam_iOS.app"
+            BlueprintName = "dashbeam_iOS"
+            ReferencedContainer = "container:dashbeam.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
       <CommandLineArguments>

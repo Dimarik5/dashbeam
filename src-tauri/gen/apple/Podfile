@@ -1,13 +1,13 @@
 # Uncomment the next line to define a global platform for your project
 
-target 'alt-sendme_iOS' do
+target 'dashbeam_iOS' do
 platform :ios, '14.0'
-  # Pods for alt-sendme_iOS
+  # Pods for dashbeam_iOS
 end
 
-target 'alt-sendme_macOS' do
+target 'dashbeam_macOS' do
 platform :osx, '11.0'
-  # Pods for alt-sendme_macOS
+  # Pods for dashbeam_macOS
 end
 
 # Delete the deployment target for iOS and macOS, causing it to be inherited from the Podfile

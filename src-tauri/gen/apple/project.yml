@@ -1,4 +1,4 @@
-name: alt-sendme
+name: dashbeam
 options:
   bundleIdPrefix: com.dashbeam.desktop
   deploymentTarget:
@@ -24,20 +24,20 @@ targetTemplates:
     settings:
       groups: [app]
 targets:
-  alt-sendme_iOS:
+  dashbeam_iOS:
     type: application
     platform: iOS
     sources:
       - path: Sources
       - path: Assets.xcassets
       - path: Externals
-      - path: alt-sendme_iOS
+      - path: dashbeam_iOS
       - path: assets
         buildPhase: resources
         type: folder
       - path: LaunchScreen.storyboard
     info:
-      path: alt-sendme_iOS/Info.plist
+      path: dashbeam_iOS/Info.plist
       properties:
         LSRequiresIPhoneOS: true
         UILaunchStoryboardName: LaunchScreen
@@ -51,10 +51,10 @@ targets:
           - UIInterfaceOrientationPortraitUpsideDown
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
-        CFBundleShortVersionString: 0.6.2
-        CFBundleVersion: "0.6.2"
+        CFBundleShortVersionString: 0.7.0
+        CFBundleVersion: "0.7.0"
     entitlements:
-      path: alt-sendme_iOS/alt-sendme_iOS.entitlements
+      path: dashbeam_iOS/dashbeam_iOS.entitlements
     scheme:
       environmentVariables:
         RUST_BACKTRACE: full
