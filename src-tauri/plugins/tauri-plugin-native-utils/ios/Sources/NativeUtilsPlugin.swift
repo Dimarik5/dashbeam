@@ -53,12 +53,15 @@ final class NativeUtilsPlugin: Plugin {
 
                 guard let url = urls.first else {
                     invoke.resolve([:])
-
-                    if let picker {
-                        self.releaseDelegate(for: picker)
-                    }
-
+                    if let picker { self.releaseDelegate(for: picker) }
                     return
+                }
+
+                let isScoped = url.startAccessingSecurityScopedResource()
+
+                var isDir: ObjCBool = true
+                if !FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir) {
+                    try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
                 }
 
                 invoke.resolve([
@@ -66,20 +69,14 @@ final class NativeUtilsPlugin: Plugin {
                     "path": url.path
                 ])
 
-                if let picker {
-                    self.releaseDelegate(for: picker)
-                }
+                if let picker { self.releaseDelegate(for: picker) }
             }
 
             self.retainDelegate(delegate, for: picker)
-
             picker.delegate = delegate
             picker.allowsMultipleSelection = false
 
-            self.manager.viewController?.present(
-                picker,
-                animated: true
-            )
+            self.manager.viewController?.present(picker, animated: true)
         }
     }
 
