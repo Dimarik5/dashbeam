@@ -433,7 +433,7 @@ pub async fn stop_sharing(state: State<'_, AppStateMutex>) -> Result<(), String>
         }
 
         #[cfg(target_os = "android")]
-        std::fs::remove_dir_all(&share._path);
+        let _ = std::fs::remove_dir_all(&share._path);
     }
 
     #[cfg(any(desktop, target_os = "android"))]
@@ -450,6 +450,7 @@ pub async fn receive_file(
     ticket: String,
     output_path: String,
     tree_uri: Option<String>,
+    sub_folder: Option<String>,
     relay: Option<RelayConfigArg>,
     discovery: Option<DiscoveryConfigArg>,
     state: State<'_, AppStateMutex>,
@@ -459,7 +460,28 @@ pub async fn receive_file(
     use iroh_blobs::ticket::BlobTicket;
     use std::str::FromStr;
 
-    let output_dir = resolve_receive_output_dir(&app_handle, output_path)?;
+    // Derive the content hash so we can manage partial store lifecycle. Parsed
+    // up front because the folder sanitizer also needs a per-peer fallback, and
+    // the sender's endpoint id rides in the same ticket.
+    let incoming_hash = BlobTicket::from_str(&ticket)
+        .ok()
+        .map(|t| t.hash().to_hex().to_string());
+    let folder_fallback = BlobTicket::from_str(&ticket)
+        .ok()
+        .map(|t| t.addr().id.to_string().chars().take(12).collect::<String>())
+        .unwrap_or_else(|| "Device".to_string());
+
+    // Auto-accepted transfers file themselves under the sender's name. The name
+    // is chosen by the peer, so it must be sanitized before it becomes a path
+    // component — see `sanitize_folder_name`.
+    let sanitized_sub_folder = sub_folder
+        .as_deref()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(|name| engine::sanitize_folder_name(name, &folder_fallback));
+
+    let output_dir =
+        resolve_receive_output_dir(&app_handle, output_path, sanitized_sub_folder.as_deref())?;
     let (relay_mode, fell_back_to_public) = resolve_relay_mode_with_fallback(relay).await?;
     let discovery_mode = build_discovery_mode(discovery)?;
     let options = ReceiveOptions {
@@ -470,11 +492,6 @@ pub async fn receive_file(
         magic_ipv6_addr: None,
     };
 
-    // Derive the content hash so we can manage partial store lifecycle.
-    let incoming_hash = BlobTicket::from_str(&ticket)
-        .ok()
-        .map(|t| t.hash().to_hex().to_string());
-
     // If a previous cancel left a partial store for a *different* hash, delete it now.
     // Same hash → keep it for resume. Different hash → it would never be reused.
     // Only act when we know the new hash; if the ticket is unparseable, leave the
@@ -483,7 +500,8 @@ pub async fn receive_file(
         let stale_hash = state.lock().await.last_cancelled_recv_hash.take();
         if let Some(stale_hash) = stale_hash {
             if &stale_hash != new_hash {
-                let stale_dir = std::env::temp_dir().join(format!(".sendme-recv-{}", stale_hash));
+                let stale_dir = engine::storage::temp_dir()
+                    .join(format!("{}{stale_hash}", engine::storage::RECV_DIR_PREFIX));
                 if stale_dir.exists() {
                     if let Err(e) = tokio::fs::remove_dir_all(&stale_dir).await {
                         tracing::warn!("Failed to remove stale partial recv store: {}", e);
@@ -719,19 +737,35 @@ fn emit_receive_download_fallback(app_handle: &tauri::AppHandle, staging_dir: &P
 fn resolve_receive_output_dir(
     app_handle: &tauri::AppHandle,
     output_path: String,
+    sub_folder: Option<&str>,
 ) -> Result<PathBuf, String> {
     #[cfg(target_os = "android")]
     {
         let _ = output_path;
-        return android_staging_receive_dir(app_handle);
+        let staging = android_staging_receive_dir(app_handle)?;
+        // Both export paths walk the staging dir and recreate each file's
+        // relative path, so a subdirectory here surfaces under the SAF tree or
+        // `Download/DashBeam` with no Kotlin change.
+        return Ok(match sub_folder {
+            Some(name) => staging.join(name),
+            None => staging,
+        });
     }
 
     #[cfg(not(target_os = "android"))]
     {
-        let output_dir = PathBuf::from(output_path.trim());
-        if output_dir.as_os_str().is_empty() {
-            return fallback_receive_dir(app_handle);
-        }
+        let base = PathBuf::from(output_path.trim());
+        let base = if base.as_os_str().is_empty() {
+            fallback_receive_dir(app_handle)?
+        } else {
+            base
+        };
+        // `ensure_dir_writable` calls `create_dir_all`, so the per-device folder
+        // is created here on first use.
+        let output_dir = match sub_folder {
+            Some(name) => base.join(name),
+            None => base,
+        };
 
         match ensure_dir_writable(&output_dir) {
             Ok(()) => Ok(output_dir),
@@ -1410,6 +1444,22 @@ pub async fn rename_paired_device(
 }
 
 #[cfg(any(desktop, target_os = "android"))]
+#[tauri::command]
+pub async fn trust_paired_device(
+    endpoint_id: String,
+    trust: bool,
+    state: State<'_, AppStateMutex>,
+) -> Result<PairedDeviceInfo, String> {
+    let guard = state.lock().await;
+    let node = require_node(&guard)?;
+    let device = node
+        .trust_paired(&endpoint_id, trust)
+        .map_err(|e| e.to_string())?;
+
+    Ok(device)
+}
+
+#[cfg(any(desktop, target_os = "android"))]
 fn require_node(guard: &crate::state::AppState) -> Result<&NodeService, String> {
     guard.node.as_deref().ok_or_else(|| {
         guard
@@ -1843,7 +1893,12 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .expect("clock should be after unix epoch")
             .as_nanos();
-        std::env::temp_dir().join(format!("{}-{}-{}.txt", name_prefix, std::process::id(), ts))
+        engine::storage::temp_dir().join(format!(
+            "{}-{}-{}.txt",
+            name_prefix,
+            std::process::id(),
+            ts
+        ))
     }
 
     /// Locks the seam with the frontend's `useAppSettingStore`, which writes
@@ -1973,7 +2028,7 @@ pub async fn delete_transfer_record(
 ) -> Result<(), String> {
     let removed = history.delete(&id).map_err(|e| e.to_string())?;
     if let Some(record) = removed {
-        engine::reclaim_partial(&record, &std::env::temp_dir());
+        engine::reclaim_partial(&record, &engine::storage::temp_dir());
     }
     Ok(())
 }
@@ -1983,7 +2038,7 @@ pub async fn clear_transfer_history(
     history: State<'_, Arc<TransferHistoryStore>>,
 ) -> Result<(), String> {
     let removed = history.clear().map_err(|e| e.to_string())?;
-    let temp_dir = std::env::temp_dir();
+    let temp_dir = engine::storage::temp_dir();
     for record in &removed {
         engine::reclaim_partial(record, &temp_dir);
     }
@@ -2011,7 +2066,7 @@ pub async fn get_transfer_temp_data(
     };
 
     let path = PathBuf::from(path);
-    if !engine::is_reclaimable_partial(&path, &std::env::temp_dir()) {
+    if !engine::is_reclaimable_partial(&path, &engine::storage::temp_dir()) {
         return Ok(TransferTempData {
             exists: false,
             size_bytes: 0,
@@ -2049,7 +2104,7 @@ pub async fn clear_transfer_temp_data(
         }
     }
 
-    engine::reclaim_partial(&record, &std::env::temp_dir());
+    engine::reclaim_partial(&record, &engine::storage::temp_dir());
     history
         .update(&id, |r| r.resumable_store_path = None)
         .map_err(|e| e.to_string())?;
